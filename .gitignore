@@ -1,0 +1,60 @@
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Dependencies
+node_modules/
+package-lock.json
+yarn.lock
+
+# Playwright output
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+
+# Test artifacts (new structure)
+/reports/test-results/
+/reports/playwright-report/
+
+# Generated bug reports and sync reports (per-feature)
+features/**/bugReports/issues_*.md
+features/**/bugReports/BUG_REPORT_SUMMARY.md
+features/**/bugReports/QA_BACKLOG.md
+features/**/bugReports/BugReports_Sync_Report_*.md
+
+# Zoho sync log (contains issue IDs — keep locally, not in source control)
+zoho/sync_log.json
+
+# Claude Code local settings (contains machine-specific paths)
+.claude/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+logs/
+*.log
+test-output.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Coverage
+coverage/
+.nyc_output/
+
+# OS files
+Thumbs.db
+.DS_Store

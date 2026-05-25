@@ -1,0 +1,9 @@
+{
+  "portalId": "your_portal_id_here",
+  "projectId": "your_project_id_here",
+  "defaultSeverity": "Minor",
+  "defaultStatus": "Open",
+  "defaultClassification": "Other bug",
+  "defaultReproducible": "Always",
+  "issuePrefix": "BUG"
+}
