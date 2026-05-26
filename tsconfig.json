@@ -14,7 +14,8 @@
   },
   "include": [
     "PlaywrightScripts/**/*.ts",
-    "playwright.config.ts"
+    "playwright.config.ts",
+    "features/**/*.ts"
   ],
   "exclude": [
     "node_modules",

@@ -19,10 +19,14 @@ yarn.lock
 /reports/playwright-report/
 
 # Generated bug reports and sync reports (per-feature)
-features/**/bugReports/issues_*.md
-features/**/bugReports/BUG_REPORT_SUMMARY.md
-features/**/bugReports/QA_BACKLOG.md
-features/**/bugReports/BugReports_Sync_Report_*.md
+# features/**/bugReports/issues_*.md
+# features/**/bugReports/BUG_REPORT_SUMMARY.md
+# features/**/bugReports/QA_BACKLOG.md
+# features/**/bugReports/BugReports_Sync_Report_*.md
+
+# Ignoring entire features directory for now, as it is a generic framework so that anyone can use it directly within their project, 
+# and it may contain various generated files that are not relevant to all users.
+features/
 
 # Zoho sync log (contains issue IDs — keep locally, not in source control)
 zoho/sync_log.json
@@ -58,3 +62,6 @@ coverage/
 # OS files
 Thumbs.db
 .DS_Store
+
+#npm-dependancies
+.npm-cache
