@@ -3,9 +3,15 @@
 ## Role
 Playwright locator specialist. Reads Agent 1's QA spec, produces a validated locator map for Agent 3 using a hybrid three-source pipeline. **Never invents selectors** — every locator must come from one of the sources below.
 
-**Trigger:** `Run Agent 2 for {FeatureName}` or Agent 1 hand-off present.
-**Requires:** `features/{FeatureName}/spec/QA_{FeatureName}.md` (Agent 1 output)
-**Expects:** `features/{FeatureName}/locators/extract_{FeatureName}_auto.json` (written by Agent 1 Step 8 — re-runs extractor only if absent)
+**Trigger (any of the following):**
+- `Run Agent 2 for {FeatureName}` — Pipeline or Standalone mode (spec or config file)
+- `Run Agent 2 for {full_or_relative_url}` — URL Mode (zero prior setup required)
+- Agent 1 hand-off present
+
+**Pipeline Mode:** requires `features/{FeatureName}/spec/QA_{FeatureName}.md` (Agent 1 output)  
+**Standalone Mode:** requires `features/{FeatureName}/feature.config.json` only (no spec needed)  
+**URL Mode:** requires only a URL — derives everything else automatically; optionally runs full pipeline through Agent 4  
+**Produces:** `features/{FeatureName}/locators/extract_{FeatureName}_auto.json` (Agent 2 runs the extractor — Agent 1 does not)  
 **Runs Before:** Agent 3
 
 ---
@@ -23,24 +29,68 @@ Playwright locator specialist. Reads Agent 1's QA spec, produces a validated loc
 
 ## Steps
 
-### Step 0 — Auto-Extraction Check
-Check if `features/{FeatureName}/locators/extract_{FeatureName}_auto.json` exists.
-- **Exists** → read directly; proceed to Step 1.
-- **Missing** → run via Bash (do not ask the user):
+### Step 0.5 — Detect Input Mode (Runs First)
+
+Determine which mode to operate in. **Check in this exact order — first match wins.**
+
+**A. URL in trigger → URL Mode** (always takes priority)
+
+If the trigger contains a URL (full or relative path), enter URL Mode. If a spec already exists for the derived feature name, print:
+```
+Spec found for {FeatureName} — URL Mode will run a fresh locator extraction. Existing spec preserved.
+```
+
+**A.1 — Parse & Derive:** Accept full URL (`https://host/path`) or relative path (`/path`). Extract base URL (scheme+host) and relative path. Convert the last non-empty path segment to PascalCase for `FeatureName` and underscore-joined lowercase for `featureSnakeCase` (e.g. `/home-owner` → `HomeOwner` / `home_owner`; `/dashboard/settings/profile` → `Profile` / `profile`). If path is `/` or ambiguous, prompt: "Feature name for this page?" If the trigger includes an explicit feature name (e.g. `Run Agent 2 for LoginPage at https://...`), use that.
+
+**A.2 — Create `feature.config.json` automatically** (do not ask the user):
+```json
+{
+  "featureName": "{DerivedFeatureName}",
+  "featureSnakeCase": "{derived_snake_case}",
+  "zohoTaskId": null,
+  "inputMode": "explore",
+  "pageUrl": "{relative_path}",
+  "description": "Auto-generated from URL: {full_url}",
+  "primaryUserRole": "User"
+}
+```
+Write to `features/{DerivedFeatureName}/feature.config.json` (create dir if absent). If file exists, overwrite only `pageUrl` and `description`; preserve `zohoTaskId` and `primaryUserRole`.
+
+**A.3** → Proceed as Standalone Mode (B) using the config just created. Override `BASE_URL` for this run only:
+```bash
+BASE_URL={scheme://host} npm run extract-locators -- --feature {FeatureName} --page {pageCamelCase} --url {relativePath}
+```
+
+**A.4 — Auto-Pipeline prompt** (after Step 5): Ask: "URL Mode — locators ready. Continue with full pipeline? [Y] Run Agent 3 → tests → Agent 4  [N] Stop here". On Y (or trigger keywords "full flow"/"run tests"/"end to end"), run **URL Mode Auto-Pipeline** below.
+
+---
+
+**B. Pipeline Mode** — spec exists, no URL in trigger → proceed normally; spec is source of truth.
+
+**C. Standalone Mode** — no spec, but `feature.config.json` exists, no URL in trigger → read config; substitute `featureName`, `featureSnakeCase`, `zohoTaskId`, `pageUrl` throughout; skip UI Inventory cross-check; `acRefs` default to `[]`; Locator Markdown includes: `> ⚠️ Standalone mode — spec not provided. AC references not populated.`
+
+**D. No URL, no spec, no config** → Stop:
+```
+No input found. Options:
+  1. URL:     "Run Agent 2 for https://your-app.com/page"
+  2. Config:  Create features/{FeatureName}/feature.config.json
+  3. Agent 1: "Run Agent 1 for {ZohoTaskId}, {FeatureName}"
+```
+
+### Step 0 — Auto-Extraction
+Agent 2 is the sole owner of locator extraction. Run via Bash (do not ask the user):
 ```bash
 npm run extract-locators -- --feature {FeatureName} --page {pageName} --url {relativeUrl}
 # Add: --login {/login/url}  for authenticated pages
 ```
 Output: `features/{FeatureName}/locators/extract_{FeatureName}_auto.json`
 
+**Re-run optimisation:** If JSON already exists and the page is unchanged, read it directly. If in doubt, re-run — the extractor is non-destructive (merges results).
+
 ### Step 1 — Read Spec + Cross-check Auto JSON
-Read `QA_{FeatureName}.md` fully. Extract: feature names, all ACs/scenarios, UI Element Inventory. Read the auto JSON. Cross-check → build:
-- **Auto-captured list** — entries with `"status": "auto-captured"`
-- **Missing list** — inventory elements absent from auto JSON (dynamic / structural)
+**Pipeline Mode:** Read `QA_{FeatureName}.md` fully. Extract feature names, ACs/scenarios, UI Element Inventory. Read auto JSON. Cross-check → build **auto-captured list** (`"status": "auto-captured"`) and **missing list** (inventory elements absent from auto JSON). Print missing list — candidates for Steps 1.5 and 2.
 
-Print missing list. These are candidates for Steps 1.5 and 2.
-
-If spec not found → stop: "Run Agent 1 first to generate `features/{FeatureName}/spec/QA_{FeatureName}.md`."
+**Standalone Mode:** Skip UI Inventory cross-check. Build auto-captured list from auto JSON contents. All absent elements → missing list for DOM eval + Codegen fallback.
 
 ### Step 1.5 — Structural DOM Inspection (Mandatory for Every Page)
 The auto-extractor skips structural elements. Run for every page in the spec:
@@ -79,7 +129,7 @@ const { chromium } = require('playwright');
 })();
 " 2>/dev/null
 ```
-Replace `${PAGE_RELATIVE_URL}` with the actual path from the spec. For each result matching an inventory entry, build selector in priority order: unique `#id` → semantic tag (`footer`, `nav`, `h1`) → `getByRole('region', { name: '...' })` → scoped CSS. Add to locator map with `"source": "dom-eval"`. Still-absent elements → Codegen fallback (Step 2).
+Replace `${PAGE_RELATIVE_URL}` with the actual path. For each result matching an inventory entry, build selector in priority order: unique `#id` → semantic tag (`footer`, `nav`, `h1`) → `getByRole('region', { name: '...' })` → scoped CSS. Add to locator map with `"source": "dom-eval"`. Still-absent elements → Codegen fallback (Step 2).
 
 ### Step 2 — Codegen Fallback (Missing Elements Only)
 If missing list is empty after Steps 0 + 1.5, skip Codegen. Otherwise:
@@ -105,12 +155,6 @@ Create `features/{FeatureName}/locators/{FeatureName}_locators.json`:
       "type": "{type}", "description": "{human_readable}",
       "acRefs": ["AC_001"], "source": "auto-extractor|dom-eval|codegen", "status": "captured"
     },
-    "{ElementWithDiscrepancy}": {
-      "primary": "{selector}", "fallback": "{alt}",
-      "codegenForm": "{exact_codegen_expression}",
-      "finding": "PRODUCT BUG — DOM renders '{actual}' but spec requires '{expected}' (AC_XXX)",
-      "type": "{type}", "description": "{desc}", "acRefs": ["AC_007"], "status": "captured"
-    },
     "{MissingElement}": {
       "primary": "MISSING", "fallback": "MISSING",
       "type": "{type}", "description": "{desc}", "acRefs": ["AC_005"],
@@ -119,7 +163,7 @@ Create `features/{FeatureName}/locators/{FeatureName}_locators.json`:
   }
 }
 ```
-**Rules:** Group by page · `primary` is a literal selector from one of the three sources (never a derived CSS equivalent) · `fallback` is an alternative resilience selector · add `"codegenForm"` when DOM/spec discrepancy exists · fragile selectors get `"fragile": true` + `"fragileNote"` · `acRefs` from UI Inventory · `description` is human-readable.
+**Rules:** Group by page · `primary` is a literal selector from one of the three sources (never a derived CSS equivalent) · `fallback` is an alternative resilience selector · add `"codegenForm"` + `"finding"` when DOM/spec discrepancy exists · fragile selectors get `"fragile": true` + `"fragileNote"` · `acRefs` from UI Inventory · `description` is human-readable.
 
 ### Step 3.5 — Uniqueness Validation (Mandatory)
 For every `primary` using `getByText()` or `getByLabel()`, validate count = 1 via Bash:
@@ -140,28 +184,20 @@ const { chromium } = require('playwright');
 ```
 - `count === 1` → keep primary
 - `count === 0` → retry without `{ exact: true }`; if still 0, mark `MISSING`
-- `count > 1` → scope to nearest semantic container: `page.locator('footer').getByText(...)` or use the semantic tag directly; re-validate; add `"note"` field explaining the scoping
+- `count > 1` → scope to nearest semantic container: `page.locator('footer').getByText(...)` or use semantic tag directly; re-validate; add `"note"` field explaining the scoping
 
 Scoping priority: semantic HTML tag → container with unique `id`/`data-testid` → CSS class (flag `"fragile": true` for auto-generated classes).
 
-### Step 4 — Build the Locator Markdown
-Create `features/{FeatureName}/locators/{FeatureName}_locators.md` with: captured locators table (constant, selector, page, state, notes), missing locators table (constant, description, how to capture), AC coverage matrix, follow-up capture checklist (conditions to trigger each missing element).
-
 ### Step 5 — Validate Outputs
-**JSON:** metadata complete · all inventory elements present (captured or missing) · every captured element has non-empty `primary` and `fallback` · `acRefs` populated · `status` is only `"captured"` or `"missing"` · valid JSON syntax.
-**Markdown:** all sections present.
+**JSON:** metadata complete · all inventory elements present (captured or missing) · every captured element has non-empty `primary` and `fallback` · `acRefs` populated · `status` is only `"captured"` or `"missing"` · valid JSON syntax.  
 **Coverage:** warn if >25% of ACs have missing locators · **block** if any P1 Critical AC has missing locators.
 
 ---
 
 ## Output Files
-
-| File | Path |
-|---|---|
-| Auto-extractor JSON | `features/{FeatureName}/locators/extract_{FeatureName}_auto.json` |
-| Codegen script | `features/{FeatureName}/locators/extract_{FeatureName}_codegen.js` |
-| Locator JSON | `features/{FeatureName}/locators/{FeatureName}_locators.json` |
-| Locator Markdown | `features/{FeatureName}/locators/{FeatureName}_locators.md` |
+- `features/{FeatureName}/locators/extract_{FeatureName}_auto.json` — auto-extractor output
+- `features/{FeatureName}/locators/extract_{FeatureName}_codegen.js` — codegen script
+- `features/{FeatureName}/locators/{FeatureName}_locators.json` — final locator map
 
 ---
 
@@ -169,7 +205,11 @@ Create `features/{FeatureName}/locators/{FeatureName}_locators.md` with: capture
 
 | Situation | Action |
 |---|---|
-| Spec not found | Stop: "Run Agent 1 first." |
+| URL provided, no other files | URL Mode — auto-derive name, create config, run extractor |
+| URL path is `/` or ambiguous | Prompt user for feature name |
+| No URL, no spec, no config | Stop with Step 0.5 D guidance |
+| Spec absent, config present | Standalone Mode |
+| URL overrides `.env` BASE_URL | Use trigger URL for this run only; do not modify `.env` |
 | Auto JSON missing | Run extractor via Bash (Step 0) |
 | Auto JSON has 0 elements | Check BASE_URL is correct; try `--headed` to inspect |
 | Codegen fails | Check: Playwright installed? App accessible? Correct base URL? |
@@ -207,6 +247,44 @@ If capture list empty, skip Codegen.
 
 ---
 
+## URL Mode Auto-Pipeline
+
+Runs automatically after Step 5 when URL Mode was used and the user confirmed full pipeline continuation.
+
+### AP-1 — Run Agent 3 (inline)
+Execute Agent 3 for `{FeatureName}` in Standalone Mode (spec absent, locator JSON present). Generates: `features/{FeatureName}/pages/{FeatureName}Page.ts`, `features/{FeatureName}/tests/feature_{feature_name}.spec.ts` (stub smoke suite), `features/{FeatureName}/testData/{feature_name}.json`. Print: `Agent 3 complete — {n} tests generated.`
+
+### AP-2 — Run Playwright Tests
+```bash
+cd "<project_root>" && npx playwright test features/{FeatureName}/tests/feature_{feature_name}.spec.ts \
+  --project=chromium \
+  2>&1
+```
+Wait for completion. Print pass/fail summary from stdout. On config or TypeScript compile error: fix the issue (apply playwright.config.ts validation from Agent 3 Step 0) and retry once.
+
+### AP-3 — Run Agent 4 (inline)
+Execute Agent 4 for `{FeatureName}`. Reads `reports/test-results/`, classifies failures, generates bug reports in `all_issues/`, produces `QA_RUN_REPORT.md`. Print completion table (product bugs / automation issues / infra / flaky).
+
+### AP-4 — Auto-Pipeline Summary
+```
+URL Mode Pipeline Complete — {FeatureName}
+  Source URL  : {full_url}
+  Config      : features/{FeatureName}/feature.config.json
+  Locators    : features/{FeatureName}/locators/{FeatureName}_locators.json
+  Page Object : features/{FeatureName}/pages/{FeatureName}Page.ts
+  Tests       : features/{FeatureName}/tests/feature_{feature_name}.spec.ts
+  HTML Report : reports/playwright-report/index.html
+  Run Report  : features/{FeatureName}/bugReports/QA_RUN_REPORT.md
+  Bug Reports : all_issues/issues_{FeatureName}_*.md
+  Tests: {passed} passed / {failed} failed / {skipped} skipped
+  Product Bugs: {n}  |  Automation Issues: {n}  |  Infra: {n}
+Next (optional):
+  Run Agent 5 for {FeatureName}   — create Zoho issues for {n} product bug(s)
+  npm run show-report             — open HTML report
+```
+
+---
+
 ## Hand-off to Agent 3
 
 ```
@@ -214,9 +292,8 @@ Agent 2 complete.
 Sources: auto-extractor ({n}) | DOM eval ({n}) | codegen ({n} | SKIPPED if 0)
 Outputs:
   features/{FeatureName}/locators/{FeatureName}_locators.json
-  features/{FeatureName}/locators/{FeatureName}_locators.md
 Captured: {n} | Missing: {n} | AC coverage: {n}/{total} ({pct}%)
 Next: "Run Agent 3 for {FeatureName}"
-  Input spec    : features/{FeatureName}/spec/QA_{FeatureName}.md
+  Input spec    : features/{FeatureName}/spec/QA_{FeatureName}.md  (optional in Standalone/URL mode)
   Input locators: features/{FeatureName}/locators/{FeatureName}_locators.json
 ```

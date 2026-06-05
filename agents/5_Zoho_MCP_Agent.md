@@ -1,20 +1,21 @@
-# Agent 5 — Zoho MCP Agent
+# Agent 5 — Zoho Sync Agent
 
 ## Role
-Reads Agent 4 bug reports, creates matching issues in Zoho Projects via the Zoho MCP API, detects duplicates, and writes a sync report summarising every action taken.
+Reads Agent 4 bug reports, creates matching issues in Zoho Projects via the Zoho REST API using credentials from `.env`, and detects duplicates.
+
+> **Standalone Use:** Agent 5 has no dependency on Agents 1–3. It only needs `all_issues/issues_{FeatureName}_*.md` files, `zoho/config.json`, and `.env` credentials. Bug report files can be authored manually following the template in Step 3 of Agent 4 — Zoho task creation does not require the full pipeline. If no matching `issues_*.md` files exist in `all_issues/`, Agent 5 exits cleanly with 0 processed.
 
 **Inputs:**
-| Input | Path |
-|---|---|
-| Bug reports | `features/{FeatureName}/bugReports/issues_*.md` |
-| Sync log | `zoho/sync_log.json` (created on first run) |
-| Config | `zoho/config.json` |
-| Credentials | `.env` (project root) |
+| Input | Path | Required |
+|---|---|---|
+| Bug reports | `all_issues/issues_{FeatureName}_*.md` | Required (0 files = exits cleanly with 0 processed) |
+| Credentials | `.env` (project root) | **Always required** |
+| Config | `zoho/config.json` | Optional — falls back to `.env` for portal/project IDs |
+| Sync log | `zoho/sync_log.json` (created on first run) | Optional — created as `[]` if absent |
 
 **Outputs:**
 | Output | Path |
 |---|---|
-| Sync report | `features/{FeatureName}/bugReports/BugReports_Sync_Report_{date}.md` |
 | Sync log | `zoho/sync_log.json` (append-only) |
 
 ---
@@ -32,26 +33,46 @@ Read `zoho/config.json` for:
   "defaultClassification": "Other bug", "defaultReproducible": "Always", "issuePrefix": "BUG"
 }
 ```
-Load `zoho/sync_log.json` (create empty `[]` if absent). Verify project via `ZohoProjects_get_project_detail`.
+Load `zoho/sync_log.json` (create empty `[]` if absent).
+
+**Get access token** — call Zoho OAuth using `.env` credentials (never use MCP connector):
+```
+POST https://accounts.zoho.com/oauth/v2/token
+  grant_type=refresh_token
+  refresh_token={ZOHO_REFRESH_TOKEN}
+  client_id={ZOHO_CLIENT_ID}
+  client_secret={ZOHO_CLIENT_SECRET}
+```
+Store the returned `access_token` in memory for all subsequent API calls. Never persist it to disk.
 
 ### Step 2 — Discover Bug Reports
-Scan `features/{FeatureName}/bugReports/issues_*.md`. Per file, parse header fields:
-`Bug ID`, `Feature`, `Acceptance Criteria ID`, `Scenario`, `Severity`, `Status`, `## Summary`, `## Root Cause Analysis`, `## Artifacts` table.
-
-Build canonical title: `[{AC_ID} | {ScenarioID}] {short description from Summary}`
+Scan `all_issues/issues_{FeatureName}_*.md` for all issues belonging to this feature. Per file, parse:
+- **`#` heading** (first line) → Zoho issue title
+- **Metadata line** → `Bug ID`, `Feature`, `AC`, `Scenario`, `Severity`, `Reproducibility`
+- **`## Description`** + **`## Steps to Reproduce`** + **`## Actual Results`** + **`## Expected Results`** → concatenated as Zoho issue description (exclude `## Proofs` — local evidence only)
 
 ### Step 3 — Duplicate Detection (Before Every Creation)
 1. Check `zoho/sync_log.json` — if `Bug ID` already has `zohoIssueId`, mark `duplicate_local`.
-2. Call `ZohoProjects_get_project_issues` — search titles for AC ID + Scenario ID match; if found, mark `duplicate_zoho`, record existing issue ID.
+2. Call Zoho REST API to search for existing issues:
+   ```
+   GET {ZOHO_BASE_URL}/portal/{ZOHO_PORTAL_ID}/projects/{ZOHO_PROJECT_ID}/bugs/
+   Authorization: Zoho-oauthtoken {access_token}
+   ```
+   Search returned titles for an exact or near-exact match with the bug report `#` heading; if found, mark `duplicate_zoho`, record existing issue ID.
 3. Only proceed to creation if neither check finds a duplicate.
 
 ### Step 4 — Create Zoho Issues
-For each non-duplicate, call `ZohoProjects_create_issue`:
+For each non-duplicate, call the Zoho REST API:
+```
+POST {ZOHO_BASE_URL}/portal/{ZOHO_PORTAL_ID}/projects/{ZOHO_PROJECT_ID}/bugs/
+Authorization: Zoho-oauthtoken {access_token}
+Content-Type: application/x-www-form-urlencoded
+```
 
 | Zoho Field | Value |
 |---|---|
-| `title` | `[{AC_ID} \| {ScenarioID}] {short description}` |
-| `description` | `## Summary` + `## Description` sections from bug report |
+| `title` | Full `#` heading from bug report — includes `[AC_XXX \| SC-X.X]` prefix and plain descriptive title |
+| `description` | `## Description` + `## Steps to Reproduce` + `## Actual Results` + `## Expected Results` sections (Proofs excluded) |
 | `severity` | Critical→`Critical` · High→`Major` · Medium→`Minor` · Low→`Minor` |
 | `status` | `Open` |
 | `classification` | `Other bug` (or from `zoho/config.json`) |
@@ -76,49 +97,14 @@ On success, append to `zoho/sync_log.json`:
 ### Step 5 — Handle Errors
 | Situation | Action |
 |---|---|
-| Auth failure | Refresh token via `ZOHO_REFRESH_TOKEN`; retry once; abort if still failing |
+| Auth failure | Re-run the Step 1 token refresh; retry the failed call once; abort if still failing |
 | Rate limit (HTTP 429) | Wait 5s; retry once; if still failing, log `error` and continue with remaining reports |
 | Non-200 response | Log response body; mark `error` in sync log; continue processing remaining reports |
 | Malformed bug report | Skip file; add warning in sync report |
 | Corrupted sync log | Reset to `[]`; log warning; proceed |
 | Zoho returns duplicate key error | Extract existing ID from response; log as `duplicate_zoho` |
 
-### Step 6 — Write Sync Report
-Create `features/{FeatureName}/bugReports/BugReports_Sync_Report_{date}.md`:
-```markdown
-# Bug Report Sync to Zoho — Report
-
-**Date**: {YYYY-MM-DD} | **Portal**: {name} (ID: {id}) | **Project**: {name} (ID: {id})
-**Processed**: {N} bug reports | **Duration**: {elapsed}
-
-## Statistics
-| Created | Duplicates Skipped | Errors | Success Rate |
-|---|---|---|---|
-| {N} | {N} | {N} | {X}% |
-
-## Successfully Created ({N})
-### {n}. BR_XXX → Zoho **{KEY}**
-- **Zoho ID**: `{id}` | **Title**: {title} | **Severity**: {sev} | **Reproducible**: {rep} | **Created**: {ISO}
-- **Bug Report**: `features/{FeatureName}/bugReports/issues_{FeatureName}_AC_XXX_SCXX.md`
-
-## Duplicates Skipped ({N})
-### {n}. BR_XXX → Already exists as **{KEY}**
-- **Source**: {local sync log | Zoho API search} | **Existing ID**: `{id}` | **Reason**: {reason}
-
-## Errors ({N})
-### {n}. BR_XXX — {error type}
-- **Error**: {message} | **Action**: {retry attempted | skipped}
-
-## Duplicate Detection
-{Narrative: how many existing issues were scanned, what was/wasn't found.}
-
-## Next Steps
-1. Zoho Projects → {project} → Issues tab
-2. Locate {list of issue keys} and assign to responsible developer
-3. Re-run after fix: `npx playwright test features/{FeatureName}/tests/feature_{feature_name}.spec.ts --project=chromium`
-```
-
-### Step 7 — Update Sync Log
+### Step 6 — Update Sync Log
 Append all new entries to `zoho/sync_log.json`. **Never delete previous entries** — the log is append-only and is the source of truth for duplicate detection.
 
 Final log structure (array, cumulative across all runs):
@@ -139,7 +125,7 @@ Final log structure (array, cumulative across all runs):
 ]
 ```
 
-### Step 8 — Output Confirmation
+### Step 7 — Output Confirmation
 ```
 ## Zoho Sync Complete
 
@@ -148,8 +134,7 @@ Final log structure (array, cumulative across all runs):
 | BR_001 | UNT-I50   | [AC_007 | SC-1.2] ...         | ✅ Created  |
 | BR_002 | —         | [AC_003 | SC-3.1] ...         | ⏭ Duplicate |
 
-Sync Report : features/{FeatureName}/bugReports/BugReports_Sync_Report_{date}.md
-Sync Log    : zoho/sync_log.json
+Sync Log : zoho/sync_log.json
 ```
 
 ---
@@ -161,7 +146,6 @@ Sync Log    : zoho/sync_log.json
 | Every `issues_*.md` file is processed | Always |
 | Duplicate check runs before every creation | Always |
 | Sync log updated after every successful creation | Always |
-| Sync report always created (even if 0 issues created) | Always |
 | `.env` credentials never written to any output file | Always |
 | API responses checked for non-200 status | Always |
 | Sync log is append-only (no entries deleted) | Always |
@@ -183,13 +167,16 @@ Sync Log    : zoho/sync_log.json
 3. **PII / credentials in bug report descriptions** — redact with `[REDACTED]` before creating any Zoho issue; log a warning.
 4. **`.env` is gitignored** — warn user if `.env` is not in `.gitignore`.
 
-## MCP Tools Used
+## Zoho REST API Endpoints Used
 
-| Tool | Purpose |
-|---|---|
-| `ZohoProjects_get_project_detail` | Verify project ID and name at startup |
-| `ZohoProjects_get_project_issues` | Fetch existing issues for duplicate detection |
-| `ZohoProjects_create_issue` | Create a new bug issue |
+All calls use `Authorization: Zoho-oauthtoken {access_token}` obtained from `.env` credentials in Step 1. Never use the MCP connector — credentials in `.env` are sufficient.
+
+| Endpoint | Method | Purpose |
+|---|---|---|
+| `accounts.zoho.com/oauth/v2/token` | POST | Get access token from refresh token |
+| `{ZOHO_BASE_URL}/portal/{portalId}/projects/{projectId}/bugs/` | GET | Fetch existing issues for duplicate detection |
+| `{ZOHO_BASE_URL}/portal/{portalId}/projects/{projectId}/bugs/` | POST | Create a new bug issue |
+| `{ZOHO_BASE_URL}/portal/{portalId}/projects/{projectId}/bugs/{bugId}/` | POST | Update an existing bug issue |
 
 ---
 
@@ -197,8 +184,7 @@ Sync Log    : zoho/sync_log.json
 
 | Item | Path |
 |---|---|
-| Bug reports to sync | `features/{FeatureName}/bugReports/issues_*.md` |
-| Sync report output | `features/{FeatureName}/bugReports/BugReports_Sync_Report_{date}.md` |
+| Bug reports to sync | `all_issues/issues_{FeatureName}_*.md` |
 | Sync log (persistent) | `zoho/sync_log.json` |
 | Zoho config | `zoho/config.json` |
 | Credentials | `.env` (project root — never committed)

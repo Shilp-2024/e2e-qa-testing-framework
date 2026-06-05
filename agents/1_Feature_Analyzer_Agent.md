@@ -1,69 +1,150 @@
 # Agent 1 — Feature Analyzer Agent
 
 ## Role
-Senior QA analyst. Fetches a Zoho task, produces `QA_{FeatureName}.md`, then runs the auto-locator extractor for Agent 2.
+Senior QA analyst. Produces `QA_{FeatureName}.md` and `feature.config.json` from three input sources: Zoho task, local document, or live URL crawl. Locator extraction is handled exclusively by Agent 2.
 
-**Trigger:** User provides Zoho task ID and feature name (e.g. `UNT-T46548`, `UserLogin`).
-**Dependencies:** Zoho MCP · Runs Before Agent 2
-**Output:** `features/{FeatureName}/spec/QA_{FeatureName}.md`
+| Mode | Trigger |
+|---|---|
+| Zoho | `Run Agent 1 for <ZohoTaskId> named "<FeatureName>"` |
+| Document | `Run Agent 1 for document "<path>" named "<FeatureName>"` |
+| Explore | `Run Agent 1 explore mode for <URL> named "<FeatureName>"` |
+| Update | `Run Agent 1 update mode for <FeatureName> — task: <ZohoTaskId>` |
+
+**Outputs:** `features/{FeatureName}/spec/QA_{FeatureName}.md` · `features/{FeatureName}/feature.config.json`
 
 ---
 
 ## Steps
+### Step 0.5 — Detect Input Mode
+Inspect the trigger text **before any other step**:
+- Contains a Zoho task ID (e.g. `UNT-T46548`) → **Zoho Mode** → Step 1-Z
+- Contains `document "..."` → **Document Mode** → Step 1-D
+- Contains `explore mode for <URL>` → **Explore Mode** → Step 1-E
+- Contains `update mode` → skip to [Update Mode](#update-mode)
+---
 
-### Step 1 — Fetch Zoho Task
-Call Zoho MCP. Extract: title, full description, all ACs + sub-scenarios, linked test cases, status, assignee, priority, sprint. **Stop and report** if task not found or has no ACs.
+### Step 1-Z — Fetch Zoho Task *(Zoho Mode)*
+Use `.env` credentials — never use the MCP connector:
+
+```
+# Get access token
+POST https://accounts.zoho.com/oauth/v2/token
+  grant_type=refresh_token · refresh_token={ZOHO_REFRESH_TOKEN}
+  client_id={ZOHO_CLIENT_ID} · client_secret={ZOHO_CLIENT_SECRET}
+
+# Fetch task
+GET {ZOHO_BASE_URL}/portal/{ZOHO_PORTAL_ID}/projects/{ZOHO_PROJECT_ID}/tasks/{task_id}/
+Authorization: Zoho-oauthtoken {access_token}
+```
+
+Extract: title, description, all ACs + sub-scenarios, linked test cases, status, assignee, priority, sprint. **Stop** if task not found or has no ACs.
+---
+
+### Step 1-D — Read Document *(Document Mode)*
+Use the `Read` tool on the path from the trigger (`.md`, `.txt`, `.pdf`, exported HTML, Confluence export). Parse: feature description, ACs (headings, numbered lists, "AC:", Given/When/Then), UI elements, roles, page URLs. Group ambiguous sections into inferred ACs; flag each `[Inferred from document — verify with team]`.
+
+**Stop** if: file not found · empty · no AC-like content parseable (describe what was found; ask for correct file).
+---
+
+### Step 1-E — Crawl Live URL *(Explore Mode)*
+```bash
+npm run extract-locators -- --feature {FeatureName} --page exploreScan --url {url}
+# Add --login {/login/url} for authenticated pages
+```
+Inventory all captured elements: form fields, inputs, dropdowns, checkboxes, file uploads, buttons, CTAs, tabs, modals, wizards, validation messages, error states. Group by user goal into functional ACs; mark all `[Inferred from DOM — verify with team]`.
+
+**Stop** if: URL unreachable · login wall without `--login` · empty extraction.
+---
 
 ### Step 2 — Identify Feature
 Derive: `{FeatureName}` (PascalCase), `{feature_name}` (snake_case), application URL/path (or `TBD — confirm with dev team`), primary user role.
 
 ### Step 3 — Parse Acceptance Criteria
-Assign IDs `AC_001`, `AC_002`, … Sub-scenarios: `SC1`, `SC2.1`, … Per scenario record: **Type** (Happy Path / Negative / Edge Case / Security / Performance / Accessibility), **Priority** (P1–P4), **Automation Feasibility**, **Test Steps** (3–6 bullets), **Expected Result**. Flag ambiguous text `[CLARIFICATION NEEDED]`. Do not invent ACs.
+Assign IDs `AC_001`, `AC_002`, … Sub-scenarios: `SC1`, `SC2.1`, … Per scenario record: **Type**, **Priority** (P1–P4), **Automation Feasibility**, **Test Steps** (3–6 bullets), **Expected Result**. Flag ambiguous text `[CLARIFICATION NEEDED]`. Do not invent ACs.
+**Allowed types:** Happy Path · Negative · Boundary Value · Equivalence Partitioning · State Transition · Decision Table · CSS Visual · Navigation · Input Validation · Session/UI State · Authentication · Authorization · Vulnerability · Session Security · Data Protection · Integration · Error Handling · Accessibility · Network Validation · Responsive · Performance Sanity · Deep Link · Data-Driven
+
+**Trigger-Based Scenario Derivation** — after mapping source ACs, apply this table per AC. Matching triggers → derive and add under the **same AC**, labelled `[Derived]`. Skip inapplicable rows.
+
+| If the AC involves… | Derive these scenario types |
+|---|---|
+| Any text input or form field | Negative: empty required field · Negative: invalid format · Input Validation |
+| Any text input or form field | Boundary Value: min length passes · min−1 fails · max length passes · max+1 fails |
+| Any text input or form field | Equivalence Partitioning: one test per valid class · one per invalid class |
+| Any text input or form field | Vulnerability: XSS payload as input · SQL injection payload as input |
+| Any text input or form field | Data-Driven: multiple invalid formats via test.each |
+| File upload | Negative: unsupported file type · Negative: file exceeds size limit |
+| File upload | Boundary Value: file at exact max size passes · max+1 byte fails |
+| File upload | Vulnerability: disguised file extension (e.g. `.pdf.exe`) |
+| File upload | Error Handling: API 500 on upload · network timeout during upload |
+| File upload | Network Validation: upload API endpoint called · no sensitive data in URL |
+| Authentication (login / logout / token) | Authentication: valid login · invalid login · locked account |
+| Authentication (login / logout / token) | Session Security: session expires · token invalidated on logout |
+| Authentication (login / logout / token) | Vulnerability: SQL injection in login fields |
+| Authorization (roles / permissions) | Authorization: correct role accesses · wrong role denied |
+| Authorization (roles / permissions) | Deep Link: direct URL access by unauthorized role → redirect |
+| Sensitive data fields (SSN / password / financial) | Data Protection: field masked · value not in URL · value not in page source |
+| Sensitive data fields (SSN / password / financial) | Session Security: data cleared on session end |
+| Any button, modal, tab, or form field | Accessibility: keyboard Tab reaches element · Tab order is correct |
+| Any button, modal, tab, or form field | Accessibility: ARIA label / role present on interactive element |
+| Modal dialog | Accessibility: focus trapped inside modal · Escape closes · focus returns to trigger |
+| Conditional UI (shows/hides based on selection) | Decision Table: each condition combination produces correct output |
+| Conditional UI (shows/hides based on selection) | Session/UI State: condition-driven state persists after navigation |
+| Data persisted across steps, tabs, or page reload | Session/UI State: data survives switching away and returning |
+| Multi-step wizard routing | State Transition: cannot access later step before completing prior steps |
+| Multi-step wizard routing | Deep Link: direct URL to step N without prior steps → redirected |
+| Multi-step wizard routing | Navigation: back button returns to correct prior step without data loss |
+| API call (form submit / fetch / upload) | Integration: API called with correct payload on valid submit |
+| API call (form submit / fetch / upload) | Error Handling: API 500 → user-visible error shown · network timeout → error shown |
+| API call (form submit / fetch / upload) | Network Validation: no sensitive data in query params or URL |
+| Active / inactive / disabled / error visual states | CSS Visual: correct CSS color and font applied per state via `toHaveCSS()` |
+| P1 critical user action | Performance Sanity: action completes within defined ms threshold |
+| P1 critical user action | Responsive: layout usable on mobile 375×667 and tablet 768×1024 viewports |
+| Shared session state (multi-tab risk) | Multi-Tab: changes in one tab do not corrupt state in another tab |
+
+**Feasibility defaults:** All derived → `Automatable` · OS-level drag-and-drop → `Manual Only` · subjective visual layout → `Manual Only` · `toHaveCSS()` checks → `Automatable` · Performance Sanity → `Automatable` (`Date.now()` delta)
 
 ### Step 4 — UI Element Inventory
 Every element touched by any scenario: **Element Name** (PascalCase), **Type**, **Page/Context**, **AC References**, **Locator Status** (`Needs Auto-Extraction` default). This is Agent 2's capture checklist.
-
 ### Step 5 — Risk Assessment
 Identify top risks across: browser compat, async timing, auth/session, data deps, environment variance, security flows. Rate each High / Medium / Low.
-
 ### Step 6 — Test Coverage Matrix
-Table: AC ID → scenario count, test types, feasibility, estimated `test()` count.
-
+Table: AC ID → scenario count, test types, feasibility, estimated `test()` count, Coverage Gaps column (types not applicable or excluded; write `—` if all covered).
 ### Step 7 — Output Validation
-Before writing, verify: all ACs represented; every scenario has type/priority/feasibility/steps/result; UI inventory covers all scenario elements; no real URLs or credentials (use `{base_url}`); PascalCase/snake_case consistent; output path correct. Fix gaps before writing.
+Fix every gap before writing:
 
-### Step 8 — Run the Auto-Extractor
-
-**8.1** Create `features/{FeatureName}/locators/` if absent.
-
-**8.2** Group UI Inventory elements by page. Per page: derive `--page` (camelCase, e.g. `signInPage`), `--url` (relative path from spec), and add `--login {/login/url}` only if the page requires authentication.
-
-**8.3** Execute directly via Bash — **do not ask the user to run it**:
-```bash
-cd "<project_root>" && npm run extract-locators -- --feature {FeatureName} --page {pageCamelCase} --url {/relative/url}
-# Add: --login {/login/url}  for authenticated pages
+1. All ACs represented — *(Zoho: all task ACs · Document: all parsed sections · Explore: all element groups)*
+2. Every scenario has type · priority · feasibility · steps · expected result — no partial entries.
+3. UI Element Inventory covers every element in any scenario step.
+4. No real URLs or credentials — use `{base_url}` throughout.
+5. PascalCase and snake_case consistent throughout.
+6. Output path correct: `features/{FeatureName}/spec/QA_{FeatureName}.md`.
+7. **Coverage completeness** — for each AC: text input → Negative + Boundary Value + Vulnerability · file upload → Negative (type) + Negative (size) + Vulnerability + Error Handling · auth/session → Authentication + Session Security · roles → Authorization + Deep Link · interactive element → Accessibility · API call → Integration + Error Handling · visual states → CSS Visual · P1 → Performance Sanity + Responsive. Derive missing types before proceeding.
+### Step 8 — Write `feature.config.json`
+```json
+{
+  "featureName": "{FeatureName}",
+  "featureSnakeCase": "{feature_name}",
+  "zohoTaskId": "{task_id | null}",
+  "inputMode": "{zoho | document | explore}",
+  "pageUrl": "{relative_page_url}",
+  "description": "{one-line feature description}",
+  "primaryUserRole": "{user_role}"
+}
 ```
-One command per unique page. Each run merges into `features/{FeatureName}/locators/extract_{FeatureName}_auto.json`. Report captured element counts and any uncaptured (dynamic) elements per page.
-
-> ⚠️ Dynamic elements (error messages, post-submit banners) will NOT appear in the auto JSON — Agent 2 handles those via Codegen fallback.
-
-**8.4** Cross-check auto JSON against UI Element Inventory. Edit the **Locator Status column only**:
-- Found in JSON (`"status": "auto-captured"`) → `Auto-extracted {YYYY-MM-DD}`
-- Not found → `Needs Codegen Fallback`
+`zohoTaskId` → task ID (Zoho) or `null` (Document / Explore). Create `features/{FeatureName}/` if absent.
 
 ---
 
 ## Output Format
-
-Write to `features/{FeatureName}/spec/QA_{FeatureName}.md` — exact structure:
-
+Write to `features/{FeatureName}/spec/QA_{FeatureName}.md`:
 ```markdown
 # QA Specification — {FeatureName}
 
 ## Meta
 | Field | Value |
 |---|---|
-| Zoho Task ID | {task_id} |
+| Input Mode | {Zoho \| Document \| Explore} |
+| Zoho Task ID | {task_id \| N/A} |
 | Feature Name | {FeatureName} |
 | snake_case Name | {feature_name} |
 | Application Page | {url_or_route} |
@@ -75,7 +156,7 @@ Write to `features/{FeatureName}/spec/QA_{FeatureName}.md` — exact structure:
 ## Acceptance Criteria
 
 ### AC_001 — {Title}
-**Description:** {full AC text from Zoho}
+**Description:** {full AC text from source}
 #### Scenarios
 | ID | Title | Type | Priority | Feasibility |
 |---|---|---|---|---|
@@ -96,15 +177,14 @@ Write to `features/{FeatureName}/spec/QA_{FeatureName}.md` — exact structure:
 | {risk} | High | {mitigation} |
 
 ## Test Coverage Matrix
-| AC | Scenarios | Types | Feasibility | Est. Tests |
-|---|---|---|---|---|
-| AC_001 | {n} | Happy Path | Automatable | {n} |
-| Total | {total} | | | {total} |
+| AC | Scenarios | Types | Feasibility | Est. Tests | Coverage Gaps |
+|---|---|---|---|---|---|
+| AC_001 | {n} | Happy Path, Negative, Boundary Value | Automatable | {n} | — |
+| Total | {total} | | | {total} | |
 
 ## Agent 2 Capture Checklist
 - [ ] {ElementName} — {type} — {page}
-> Auto-extractor run by Agent 1 (Step 8). Results: `features/{FeatureName}/locators/extract_{FeatureName}_auto.json`
-> Dynamic elements require Agent 2 Codegen fallback.
+> Agent 2 runs the auto-extractor and all Codegen fallback. Provide this checklist when triggering Agent 2.
 
 ## Notes & Clarifications
 - {flagged items / [CLARIFICATION NEEDED] entries}
@@ -113,51 +193,47 @@ Write to `features/{FeatureName}/spec/QA_{FeatureName}.md` — exact structure:
 ---
 
 ## Error Handling
-
 | Situation | Action |
 |---|---|
-| Task not found | Stop: "Task {id} not found in Zoho — verify ID and retry." |
-| Task has no ACs | Stop: "Task {id} has no Acceptance Criteria — add them in Zoho before proceeding." |
+| Zoho: Task not found | Stop: "Task {id} not found in Zoho — verify ID and retry." |
+| Zoho: No ACs | Stop: "Task {id} has no Acceptance Criteria — add them in Zoho before proceeding." |
+| Document: File not found | Stop: "File not found at '{path}' — verify path and retry." |
+| Document: No parseable ACs | Stop: describe what was found; ask for correct file |
+| Explore: URL unreachable | Stop: "Cannot reach {url} — verify URL and that the app is running." |
+| Explore: Login wall, no --login | Stop: "Page requires auth — re-trigger with `--login {/login/path}`" |
+| Explore: Empty extraction | Stop: "No elements captured — page may be JS-heavy. Check manually." |
 | Ambiguous AC text | Include as-is with `[CLARIFICATION NEEDED — {reason}]` |
 | Feature name unclear | Ask: "What should the PascalCase feature name be?" |
 | Output folder missing | Create `features/{FeatureName}/spec/` before writing |
-
 ## Validation Rules
-1. All ACs/scenarios trace to Zoho task text — no fabrication
+1. All ACs/scenarios trace to the input source (Zoho task text · document content · DOM elements) — no fabrication
 2. No hardcoded credentials or real URLs — use `{base_url}` placeholder
-3. PascalCase `{FeatureName}` and snake_case `{feature_name}` consistent throughout
+3. PascalCase and snake_case consistent throughout
 4. Every scenario has steps + expected result — partial entries unacceptable
 5. Every element referenced in any scenario step appears in the UI Element Inventory
+6. Every AC must include all scenario types required by the Step 3 Derivation Table. Specs with missing required types are invalid until derived scenarios are added.
 
 ---
 
 ## Update Mode
-
-**Trigger:** `Run Agent 1 update mode for {FeatureName} — task: {task_id}`
-If spec file absent, fall back to normal mode and inform the user.
-
+**Trigger:** `Run Agent 1 update mode for {FeatureName} — task: {task_id}` — fall back to normal mode if spec absent.
 **U1** Check `features/{FeatureName}/spec/QA_{FeatureName}.md` exists.
-
-**U2** Fetch new Zoho task (same as Step 1).
-
-**U3** Diff against existing spec — classify each AC as: **New** (in new task, not in spec) / **Modified** (in both, content differs) / **Unchanged** (in both, content identical) / **Removed** (in spec, absent from new task).
-
-**U4** Apply minimum edits to spec:
-- **New** → append with next sequential ID (e.g. if spec ends at `AC_012`, new starts at `AC_013`)
-- **Modified** → edit in-place + add `> ⚠️ Updated {YYYY-MM-DD} — {task_id}: {one-line reason}` under heading
+**U2** Fetch new Zoho task (Step 1-Z).
+**U3** Diff against existing spec — classify each AC: **New** · **Modified** · **Unchanged** · **Removed**.
+**U4** Apply minimum edits:
+- **New** → append with next sequential ID; note gap in Change Log
+- **Modified** → edit in-place + add `> ⚠️ Updated {YYYY-MM-DD} — {task_id}: {reason}` under heading
 - **Unchanged** → do not touch
-- **Removed** → add `> ~~Removed {YYYY-MM-DD} — {task_id}~~` under heading (never delete)
-- Also update: UI Element Inventory (add new / mark removed as `Deprecated`), Test Coverage Matrix, Agent 2 Capture Checklist
+- **Removed** → add `> ~~Removed {YYYY-MM-DD} — {task_id}~~` — never delete
+- Also update: UI Element Inventory (add new / mark `Deprecated`), Test Coverage Matrix, Agent 2 Capture Checklist
 
-**U5** Append to `## Change Log` at bottom of spec (create section if absent):
+**U5** Append to `## Change Log` (create if absent):
 ```markdown
 ### {YYYY-MM-DD} — {task_id}
 | Change | AC ID | Summary |
 |---|---|---|
-| New | AC_013 | {one-line description} |
+| New | AC_013 | {description} |
 | Modified | AC_007 | {what changed} |
-| Removed | — | — |
-| Unchanged | AC_001 … AC_006 | — |
 ```
 
 **U6** Write `features/{FeatureName}/spec/.ac_changes.json`:
@@ -169,29 +245,26 @@ If spec file absent, fall back to normal mode and inform the user.
   "affectedTests": { "new": ["SC-5.1"], "modify": ["SC-1.2"], "skip": [] }
 }
 ```
-> `affectedTests` is best-effort pre-fill by Agent 1; Agent 3 verifies and adjusts against the actual test file.
-
-**U7** Print summary: AC counts (new/modified/removed/unchanged), new UI element list, file paths.
-
-**Update Rules:** Existing AC IDs never renumbered · removed ACs marked not deleted · `.ac_changes.json` always written even if 0 changes · Change Log appended not replaced · no credentials added · AC numbering gaps filled sequentially with gap noted in Change Log.
+> `affectedTests` is best-effort pre-fill; Agent 3 verifies against the actual test file.
+**U7** Print: AC counts (new/modified/removed/unchanged), new UI element list, file paths.
+**Update Rules:** Existing AC IDs never renumbered · removed ACs marked not deleted · `.ac_changes.json` always written (even 0 changes) · Change Log appended not replaced · no credentials added · numbering gaps filled sequentially with gap noted.
 
 **Update Error Handling:**
-
 | Situation | Action |
 |---|---|
-| No diff (all ACs unchanged) | Write `.ac_changes.json` with all in `unchanged`; print "No changes — spec is up to date." |
+| No diff | Write `.ac_changes.json` with all `unchanged`; print "No changes — spec is up to date." |
 | New task removes all ACs | Stop: "New task has no ACs — verify ID before proceeding." |
-| Spec malformed/unparseable | Stop and report parse error; ask user to manually review before retrying |
+| Spec malformed | Stop: report parse error; ask user to review before retrying |
 
 ---
 
 ## Hand-off to Agent 2
-
 ```
 Agent 1 complete.
 Spec    : features/{FeatureName}/spec/QA_{FeatureName}.md
+Config  : features/{FeatureName}/feature.config.json
 ACs: {n} | Scenarios: {n} | UI elements: {n}
-Auto-extracted : {n} → features/{FeatureName}/locators/extract_{FeatureName}_auto.json
-Not captured (dynamic → Agent 2 Codegen fallback): {list element names}
 Next: "Run Agent 2 for {FeatureName}"
 ```
+
+> **Note:** Agent 2 owns all locator extraction (auto-extractor + DOM eval + Codegen). If Agent 2 is triggered with a URL (e.g. `Run Agent 2 for https://...`), URL Mode takes priority and runs a fresh extraction — the spec file above is preserved.

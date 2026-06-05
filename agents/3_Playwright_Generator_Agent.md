@@ -4,11 +4,10 @@
 Generates a complete, production-ready Playwright test suite (Page Objects, test spec, test data) from the feature spec and locator map.
 
 **Inputs:**
-| Input | Path |
-|---|---|
-| Feature spec | `features/{FeatureName}/spec/QA_{FeatureName}.md` |
-| Locator map | `features/{FeatureName}/locators/{FeatureName}_locators.md` |
-| Locator JSON | `features/{FeatureName}/locators/{FeatureName}_locators.json` |
+| Input | Path | Required |
+|---|---|---|
+| Locator JSON | `features/{FeatureName}/locators/{FeatureName}_locators.json` | **Always required** |
+| Feature spec | `features/{FeatureName}/spec/QA_{FeatureName}.md` | Pipeline Mode only (optional in Standalone) |
 
 **Outputs:**
 | Output | Path |
@@ -21,6 +20,33 @@ Generates a complete, production-ready Playwright test suite (Page Objects, test
 
 ## Steps
 
+### Step 0.5 — Detect Input Mode (Runs First)
+
+Determine which mode to operate in before reading any feature files:
+
+**A. Pipeline Mode** — both `spec/QA_{FeatureName}.md` AND `locators/{FeatureName}_locators.json` exist  
+→ Proceed with full behavior. Spec drives AC grouping, scenario structure, feasibility filtering, and test data categories.
+
+**B. Standalone Mode** — only `locators/{FeatureName}_locators.json` exists (spec absent)  
+→ Read `featureName` and `featureSnakeCase` from locator JSON `metadata` block.  
+→ Substitute these values throughout all subsequent steps, with the following differences from Pipeline Mode:
+
+| Pipeline Mode | Standalone Mode substitute |
+|---|---|
+| AC grouping by `test.describe()` per AC | Single `test.describe('{FeatureName} — Smoke')` block |
+| Tests per scenario from spec | One test per captured locator: verify element is visible and interactive |
+| Test title: `SC-X.X \| AC_XXX — {desc}` | `SC-STUB \| AC_UNKNOWN — {ElementName} is accessible` |
+| Tags from feasibility + priority | `@smoke @functional` on every test |
+| Test data: valid / invalid / edge-case groups | Minimal `validData` group only |
+| Manual-only ACs skipped | N/A (no spec to read manual-only flag from) |
+| Pre-conditions from spec | Generic: navigate to page + wait for first element visible |
+
+**C. Locator JSON missing** → Stop:
+```
+Locator JSON not found at features/{FeatureName}/locators/{FeatureName}_locators.json.
+Run Agent 2 first (or provide the locators JSON) — it is the minimum required input for Agent 3.
+```
+
 ### Step 0 — Verify `playwright.config.ts`
 Before generating any code, read the config and verify:
 1. `import * as dotenv from 'dotenv'; dotenv.config();` at the very top of the file
@@ -29,8 +55,10 @@ Before generating any code, read the config and verify:
 
 Fix any missing item and report: `"Fixed playwright.config.ts — [what changed]."` A missing `.env` must fail loudly — never silently use a wrong URL.
 
-### Step 1 — Parse Feature Spec
-Extract: feature names (PascalCase + snake_case), all ACs + scenarios (IDs, type, priority, feasibility), pre-conditions, manual-only ACs, environment notes.
+### Step 1 — Parse Feature Spec (Pipeline Mode only)
+**Pipeline Mode:** Extract: feature names (PascalCase + snake_case), all ACs + scenarios (IDs, type, priority, feasibility), pre-conditions, manual-only ACs, environment notes.
+
+**Standalone Mode:** Skip this step. Feature names were read from locator JSON metadata in Step 0.5.
 
 ### Step 2 — Parse Locator Map
 Extract: all captured locators + selector expressions, missing locators (placeholders), URL constants, which ACs are covered vs. missing.
@@ -149,7 +177,7 @@ test('SC-2.1 | AC_002 — Valid credentials authenticate and redirect',
 ### Step 7 — Output Summary
 Print: file table (path, line count, notes) + AC coverage table (AC, status, scenarios, notes). Then:
 ```
-Next: npx playwright test features/{FeatureName}/tests/feature_{feature_name}.spec.ts --reporter=html,json,junit
+Next: npx playwright test features/{FeatureName}/tests/feature_{feature_name}.spec.ts --project=chromium
 Then run Agent 4.
 ```
 
@@ -169,6 +197,8 @@ Then run Agent 4.
 
 | Situation | Action |
 |---|---|
+| Locator JSON missing | Stop with Step 0.5 guidance (run Agent 2 first) |
+| Spec missing AND locator JSON exists | Standalone Mode (Step 0.5 B) — produce stub smoke tests |
 | Missing locators | Placeholder + `// TODO(Agent2-rerun)` + comment out dependent assertions |
 | Manual-only AC | Skip automation + `// NOTE: manual verification required` comment |
 | AC has no matching scenarios | Log in output summary; do not skip silently |
@@ -213,7 +243,7 @@ test.skip('SC-X.X | AC_XXX — {original title}', async ({ page }) => {
 ## Hand-off to Agent 4
 
 ```
-Next: npx playwright test features/{FeatureName}/tests/feature_{feature_name}.spec.ts --reporter=html,json,junit
+Next: npx playwright test features/{FeatureName}/tests/feature_{feature_name}.spec.ts --project=chromium
 Results → reports/test-results/ (JSON, JUnit, screenshots, videos, traces)
          reports/playwright-report/ (HTML report)
 Agent 4 reads from reports/test-results/

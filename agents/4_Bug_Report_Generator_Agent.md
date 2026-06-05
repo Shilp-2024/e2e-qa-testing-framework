@@ -4,21 +4,20 @@
 Senior QA Architect / SDET. Reads Playwright test results, classifies every failure by root cause, generates developer-ready bug reports (one per product bug), a QA backlog for non-product failures, and a full run summary.
 
 **Inputs:**
-| Input | Path |
-|---|---|
-| Results JSON | `reports/test-results/results.json` |
-| JUnit XML | `reports/test-results/junit.xml` |
-| Artifacts | `reports/test-results/{folder}/` (screenshot, video, trace) |
-| Feature spec | `features/{FeatureName}/spec/QA_{FeatureName}.md` |
-| Test suite | `features/{FeatureName}/tests/feature_{feature_name}.spec.ts` |
-| Page objects | `features/{FeatureName}/pages/{PageName}Page.ts` |
+| Input | Path | Required |
+|---|---|---|
+| Results JSON | `reports/test-results/results.json` | **Always required** |
+| JUnit XML | `reports/test-results/junit.xml` | Fallback if results.json absent |
+| Artifacts | `reports/test-results/{folder}/` (screenshot, video, trace) | Optional (noted if absent) |
+| Test suite | `features/{FeatureName}/tests/feature_{feature_name}.spec.ts` | **Always required** |
+| Page objects | `features/{FeatureName}/pages/{PageName}Page.ts` | Optional (enhances line-number tracing) |
+| Feature spec | `features/{FeatureName}/spec/QA_{FeatureName}.md` | Optional — enriches Expected Result in bug reports |
 
 **Outputs:**
 | Output | Path |
 |---|---|
-| Bug report (per product bug) | `features/{FeatureName}/bugReports/issues_{FeatureName}_AC_XXX_SCXX.md` |
-| QA backlog | `features/{FeatureName}/bugReports/QA_BACKLOG.md` |
-| Run summary | `features/{FeatureName}/bugReports/BUG_REPORT_SUMMARY.md` |
+| Bug report (per product bug) | `all_issues/issues_{FeatureName}_AC_XXX_SCXX.md` |
+| Run report | `features/{FeatureName}/bugReports/QA_RUN_REPORT.md` |
 
 ---
 
@@ -26,6 +25,11 @@ Senior QA Architect / SDET. Reads Playwright test results, classifies every fail
 
 ### Step 1 — Collect Test Results
 Scan `reports/test-results/` for failed test directories. Per failure: note screenshot/video/trace paths (mark absent if not found), extract error + stack trace from `results.json` or `junit.xml`, extract `stderr` console output, map test title to Scenario ID + AC refs via the test suite file, identify the page object method + line number.
+
+**Spec file (optional):** If `features/{FeatureName}/spec/QA_{FeatureName}.md` exists, read it to populate the **Expected Result** field in bug reports from the AC definition. If spec is absent, use this fallback text in every **Expected Result**:
+> `Test should have passed per test design. Run Agent 1 to populate expected results from the AC definition.`
+
+AC refs are always parsed directly from the test title (`SC-X.X | AC_XXX` pattern) regardless of whether the spec is present. Falls back to `AC_UNKNOWN` if the pattern is not found.
 
 Note `reports/playwright-report/index.html` (always written, referenced in Step 7).
 
@@ -53,75 +57,71 @@ Classify every failure using all evidence: stack trace, error message, console o
 | Classification | Action |
 |---|---|
 | Product Bug | Step 3 → individual `issues_*.md` file + route to Agent 5 |
-| Automation Issue | `QA_BACKLOG.md` — Automation Issues section only |
-| Infra Failure | `QA_BACKLOG.md` — Infra Failures section only |
-| Flaky Failure | `QA_BACKLOG.md` — Flaky Tests section only |
+| Automation Issue | `QA_RUN_REPORT.md` — Automation Issues section only |
+| Infra Failure | `QA_RUN_REPORT.md` — Infra Failures section only |
+| Flaky Failure | `QA_RUN_REPORT.md` — Flaky Tests section only |
 
-**Duplicate check:** Before Step 3, verify no `issues_*.md` already exists for the same AC + Scenario. If it does, skip creation and note as duplicate in the summary.
+**Duplicate check:** Before Step 3, verify no `issues_*.md` already exists in `all_issues/` for the same AC + Scenario. If it does, skip creation and note as duplicate in the QA backlog.
 
 ### Step 3 — Generate Bug Reports (Product Bugs Only)
-File: `features/{FeatureName}/bugReports/issues_{FeatureName}_AC_XXX_SCXX.md`
+File: `all_issues/issues_{FeatureName}_AC_XXX_SCXX.md` — create `all_issues/` at project root if absent.
 ```markdown
-# Bug Report: [Short failure description]
+# [AC_XXX | SC-X.X] {Plain descriptive title — e.g. "[AC_003 | SC3] Submission timestamp missing on application confirmation page"}
 
-**Bug ID**: BR_XXX | **Status**: New | **Created**: {YYYY-MM-DD}
-**Feature**: {FeatureName} | **AC**: {AC_XXX} | **Scenario**: {SC-X.X — description}
-**Failure Type**: Product Bug | **Severity**: {Critical|High|Medium|Low}
-**Environment**: {url} | **Browser**: {browser} | **Reproducibility**: {100%|Intermittent}
+**Bug ID**: BR_XXX | **Feature**: {FeatureName} | **AC**: AC_XXX | **Scenario**: SC-X.X | **Severity**: {Critical|High|Medium|Low} | **Reproducibility**: {Always|Intermittent}
 
 ---
 
-## Summary
-{One paragraph: what was expected, what was observed, selector/assertion involved.}
-
 ## Description
-- **Affected Component**: {page — element description}
-- **Impact**: {what this prevents the user from doing}
-- **Frequency**: {Always|Intermittent}
-
-{Detailed explanation: selector mismatch, timeout, assertion value, DOM structure issue.}
+{Prose paragraph: what the defect is, what the user observes, which area of the app is affected. Written for a developer who has never seen the test suite.}
 
 ## Pre-Conditions
-- {Pre-condition 1}
+{Include only if there are genuine pre-conditions — e.g. must be logged in, must have completed prior wizard steps. If none, omit this section entirely.}
 
 ## Steps to Reproduce
-1. {step} … N. **Observe**: {actual behaviour}
+1. {User-facing step — e.g. "Navigate to {base_url}/home-owner"}
+2. {Action — e.g. "Click Start New Application"}
+3. {Input — e.g. "Enter a value exceeding 255 characters in the Street Address field"}
+N. Observe the result.
 
-**Test Reference:** `{test file}` · `{test title}` · Line {n} · `{PageName}.{method}()` → `{PageName}Page.ts:{n}`
+## Actual Results
+- {What the app actually does — written as user-observable behaviour, not Playwright output}
+- {Additional observed behaviour if any}
 
-## Actual Result
-\`\`\`
-{verbatim Playwright error output}
-\`\`\`
-**Screenshot:** `reports/test-results/{folder}/test-failed-1.png`
+## Expected Results
+- {What the app should do per the specification}
+- {Additional expected behaviour if any}
 
-## Expected Result
-{What AC requires.}
-
-## Root Cause Analysis
-**Classification Rationale:** {Why Product Bug — from Step 2.5}
-{Probable causes and recommended developer fix.}
-
-## Artifacts
-| File | Location |
-|---|---|
-| Screenshot | `reports/test-results/{folder}/test-failed-1.png` |
-| Video | `reports/test-results/{folder}/video.webm` |
-| Trace | `reports/test-results/{folder}/trace.zip` |
-
-\`\`\`bash
-npx playwright show-trace "reports/test-results/{folder}/trace.zip"
-\`\`\`
-
-## References
-[Spec](../spec/QA_{FeatureName}.md) · [Test](../tests/feature_{feature_name}.spec.ts#{n}) · [Page Object](../pages/{PageName}Page.ts#{n})
+## Proofs
+- Artifacts: `reports/test-results/{folder}/`
+  _(add screenshots, videos, console logs, or any other evidence here)_
 ```
 
-### Step 4 — Generate QA Backlog (`QA_BACKLOG.md`)
-Always write this file (even with all-empty sections):
+### Step 4 — Generate QA Run Report (`QA_RUN_REPORT.md`)
+Always write this file (even with all-empty backlog sections):
 ```markdown
-# QA Backlog — {FeatureName}
-**Date**: {YYYY-MM-DD} | **Feature**: {FeatureName}
+# QA Run Report — {FeatureName}
+**Date**: {YYYY-MM-DD} | **Feature**: {FeatureName} | **Environment**: {url} | **Browser**: {browser}
+
+## Run Statistics
+| Total | Passed | Failed | Skipped | Flaky | Pass Rate |
+|---|---|---|---|---|---|
+| {N} | {N} | {N} | {N} | {N} | {X}% |
+
+## Failure Classification
+| Type | Count | Owner |
+|---|---|---|
+| Product Bug | {N} | Dev Team |
+| Automation Issue | {N} | QA Team |
+| Infra Failure | {N} | DevOps |
+| Flaky Failure | {N} | QA Team |
+
+## AC Impact
+| AC | Status | Affected Scenarios | Classification |
+|---|---|---|---|
+| AC_001 | ✅ Verified | SC-1.1 | — |
+| AC_XXX | ❌ Blocked | SC-X.X | Product Bug |
+| AC_YYY | ⚠️ Investigate | SC-X.X | Automation Issue / Infra / Flaky |
 
 ## Automation Issues ({N})
 ### AI-{n} — SC-X.X | {title}
@@ -143,60 +143,18 @@ Always write this file (even with all-empty sections):
 | FL-1 | Flaky Test | SC-X.X | QA Team | Low |
 ```
 
-### Step 5 — Generate Run Summary (`BUG_REPORT_SUMMARY.md`)
-```markdown
-# Bug Report Summary — {FeatureName}
-**Date**: {YYYY-MM-DD} | **Feature**: {FeatureName} | **Environment**: {url} | **Browser**: {browser}
-
-## Summary Statistics
-| Total | Passed | Failed | Skipped | Flaky | Pass Rate |
-|---|---|---|---|---|---|
-| {N} | {N} | {N} | {N} | {N} | {X}% |
-
-## Failure Classification
-| Type | Count | Action | Owner |
-|---|---|---|---|
-| Product Bug | {N} | Bug reports created → Agent 5 | Dev Team |
-| Automation Issue | {N} | QA Backlog | QA Team |
-| Infra Failure | {N} | QA Backlog | DevOps |
-| Flaky Failure | {N} | QA Backlog | QA Team |
-
-## Product Bug Reports ({N})
-### BR_{n} — {ScenarioID} | {AC_ID}
-**File**: [{filename}]({filename}) | **Severity**: {sev} | **Error**: {brief desc} | **Expected**: {expected} | **Actual**: {actual}
-
-## Passed Tests
-| Scenario | AC Coverage | Duration | Status |
-|---|---|---|---|
-| SC-X.X — {desc} | AC_001 | {Xs} | ✅ Passed |
-
-## Acceptance Criteria Impact
-| AC | Status | Affected Scenarios | Classification |
-|---|---|---|---|
-| AC_001 | ✅ Verified | SC-1.1 | — |
-| **AC_XXX** | **❌ Blocked** | **SC-X.X** | Product Bug |
-| **AC_YYY** | **⚠️ Investigate** | **SC-X.X** | Automation Issue |
-
-## Next Steps
-1. **Agent 5** — {N} product bug(s) ready: `features/{FeatureName}/bugReports/issues_*.md`
-2. **QA Team** — `QA_BACKLOG.md` ({N} automation + {N} flaky)
-3. **DevOps** — `QA_BACKLOG.md` ({N} infra)
-4. **Re-run**: `npx playwright test features/{FeatureName}/tests/feature_{feature_name}.spec.ts --project=chromium`
-```
-
-### Step 6 — Validate Outputs
-**Bug reports:** Product Bug type only · sequential IDs (`BR_001`, …) · verbatim error in Actual Result · classification rationale present · all three artifact paths listed · `show-trace` command correct · relative reference links.
+### Step 5 — Validate Outputs
+**Bug reports:** Product Bug type only · sequential IDs (`BR_001`, …) · plain descriptive `#` title · Description is prose (no Playwright output) · Steps to Reproduce are user-facing app actions with no test file or page object references · Pre-Conditions section omitted if none · Actual Results, Expected Results, and Proofs sections present · Proofs contains artifacts folder path · metadata line has all 6 required fields · saved to `all_issues/`.
 **QA Backlog:** all three sections present · every entry has rationale + recommended action · Action Items table complete.
-**Summary:** stats accurate (passed + failed + skipped = total) · classification totals match failed count · AC impact covers all tested ACs.
 
-### Step 7 — Output Confirmation
+### Step 6 — Output Confirmation
 ```
 Agent 4 Complete.
 | Type             | Count | Files |
-| Product Bug      |  {N}  | {N} issues_*.md → ready for Agent 5 |
-| Automation Issue |  {N}  | QA_BACKLOG.md |
-| Infra Failure    |  {N}  | QA_BACKLOG.md |
-| Flaky Failure    |  {N}  | QA_BACKLOG.md |
+| Product Bug      |  {N}  | {N} issues_*.md → all_issues/ → ready for Agent 5 |
+| Automation Issue |  {N}  | QA_RUN_REPORT.md |
+| Infra Failure    |  {N}  | QA_RUN_REPORT.md |
+| Flaky Failure    |  {N}  | QA_RUN_REPORT.md |
 
 HTML report: reports/playwright-report/index.html
   npm run show-report  (or: npx playwright show-report reports/playwright-report)
@@ -213,15 +171,14 @@ Next: Run Agent 5 for {FeatureName}
 |---|---|
 | Classify every failure before creating any file | Always |
 | Bug reports only for Product Bugs | Always |
-| Automation / Infra / Flaky → QA_BACKLOG.md only | Always |
+| Automation / Infra / Flaky → QA_RUN_REPORT.md only | Always |
 | `page.goto` + connection error = Infra, not Product Bug | Always |
 | `waitForURL` after form submit timeout = Product Bug | Always |
 | Flaky requires `retryCount ≥ 1` AND eventual pass | Always |
 | Bug IDs sequential within a single run | Always |
-| Verbatim Playwright error in Actual Result | Always |
+| Steps to Reproduce written as user-facing app actions — no test file or page object references | Always |
 | Duplicate check before any `issues_*.md` creation | Always |
-| `BUG_REPORT_SUMMARY.md` always overwrites existing | Always |
-| `QA_BACKLOG.md` always written (even if 0 non-product failures) | Always |
+| `QA_RUN_REPORT.md` always written (even if 0 non-product failures) | Always |
 | Passed tests never get bug report files | Always |
 
 ## Error Handling
@@ -229,6 +186,7 @@ Next: Run Agent 5 for {FeatureName}
 | Situation | Action |
 |---|---|
 | `reports/test-results/` empty | Stop: "No test results found — run Playwright first." |
+| Feature spec missing | Continue in standalone mode; use Expected Result fallback text (Step 1) |
 | Classification confidence Low | Route normally; note `Confidence: Low`; add manual review flag |
 | Artifacts missing | Note `(artifact not found)` — do not error out |
 | Test title has no AC ref | Check suite JSDoc; fallback to `AC_UNKNOWN` |
