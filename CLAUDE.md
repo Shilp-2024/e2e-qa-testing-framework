@@ -5,16 +5,18 @@ A 5-agent Playwright E2E QA framework for the WAP (Weatherization Assistance Pro
 
 **Pipeline:**
 ```
-Agent 1 (Zoho task → QA spec)
+Agent 1 (Zoho task | document | URL → QA spec)
   → Agent 2 (live DOM → locator JSON)
     → Agent 3 (spec + locators → Playwright tests)
-      → Agent 4 (test results → bug reports)
-        → Agent 5 (bug reports → Zoho issues)
+      → Agent 4 (test results → bug reports → all_issues/)
+        → Agent 5 (all_issues/ → Zoho issues via REST API)
 ```
 
 ## How to trigger each agent
 ```
-Run Agent 1 for <ZohoTaskId> named "<TaskName>"
+Run Agent 1 for <ZohoTaskId> named "<TaskName>"        ← Zoho mode
+Run Agent 1 for document "<path>" named "<TaskName>"   ← Document mode
+Run Agent 1 explore mode for <URL> named "<TaskName>"  ← Explore mode
 Run Agent 2 for <FeatureName>
 Run Agent 3 for <FeatureName>
 Run Agent 4 for <FeatureName>

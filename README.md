@@ -9,20 +9,20 @@ Each agent is a Claude Code instruction file in `agents/`. Run them by typing a 
 ## Pipeline Overview
 
 ```
-Zoho Task (ID)
-      │
+Zoho Task (ID)  |  Local Document  |  Live URL
+                      │
       ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  Agent 1 — Feature Analyzer                                                 │
-│  Trigger (Zoho):     Run Agent 1 for <ZohoTaskId> named "<TaskName>"       │
-│  Trigger (Document): Run Agent 1 for document "<path>" named "<TaskName>"  │
-│  Trigger (Explore):  Run Agent 1 explore mode for <URL> named "<TaskName>" │
+│  Trigger (Zoho):     Run Agent 1 for <ZohoTaskId> named "<TaskName>"        │
+│  Trigger (Document): Run Agent 1 for document "<path>" named "<TaskName>"   │
+│  Trigger (Explore):  Run Agent 1 explore mode for <URL> named "<TaskName>"  │
 │  • Zoho mode   — fetches task via REST API                                  │
-│  • Document mode — parses a local spec file (md, txt, pdf, html)           │
-│  • Explore mode  — crawls the live URL and infers ACs from the DOM         │
+│  • Document mode — parses a local spec file (md, txt, pdf, html)            │
+│  • Explore mode  — crawls the live URL and infers ACs from the DOM          │
 │  • Extracts all ACs, scenarios, and UI Element Inventory                    │
 │  • Derives additional test scenarios (boundary, security, accessibility…)   │
-│  OUTPUT → features/{FeatureName}/spec/QA_{FeatureName}.md                  │
+│  OUTPUT → features/{FeatureName}/spec/QA_{FeatureName}.md                   │
 │           features/{FeatureName}/feature.config.json                        │
 └─────────────────────────────────────────────────────────────────────────────┘
       │
