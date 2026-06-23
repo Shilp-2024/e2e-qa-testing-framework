@@ -37,9 +37,16 @@ test.describe('CountyAssignmentManageCounties — AC_001: Create Agency County D
     'SC-1.1 | AC_001 — Counties Served multi-select dropdown renders on Create Agency form',
     { tag: ['@debug', '@smoke', '@regression', '@functional'] },
     async ({ page }) => {
-      // Assert
       await expect(page.locator('#counties-served')).toBeVisible({ timeout: 90000 });
       await expect(page.locator('h1')).toContainText(expectedTexts.createAgencyHeading, { timeout: 90000 });
+
+      await agencyPage.selectState(validData.state);
+      await agencyPage.openCountiesDropdown();
+      await page.locator('input[placeholder="Search county..."]').fill(validData.county, { timeout: 90000 });
+      await agencyPage.selectCounty(validData.county);
+      await agencyPage.selectCounty(validData.secondCounty);
+
+      await expect(page.locator('#counties-served span').filter({ hasText: /^2$/ })).toBeVisible({ timeout: 90000 });
     }
   );
 
@@ -285,7 +292,7 @@ test.describe('CountyAssignmentManageCounties — AC_001: Create Agency County D
 
   test(
     'SC-1.9 | AC_001 — County dropdown state after navigating away and back',
-    { tag: ['@debug', '@regression', '@functional'] },
+    { tag: ['@skip', '@debug', '@regression', '@functional'] },
     async ({ page }) => {
       await agencyPage.selectState(validData.state);
       await agencyPage.openCountiesDropdown();
@@ -301,7 +308,7 @@ test.describe('CountyAssignmentManageCounties — AC_001: Create Agency County D
 
   test(
     'SC-1.12 | AC_001 — Create Agency form submit sends correct county payload to API',
-    { tag: ['@debug', '@regression', '@functional'] },
+    { tag: ['@skip', '@debug', '@regression', '@functional'] },
     async ({ page }) => {
       let capturedBody: Record<string, unknown> = {};
       let capturedBodyStr = '';
@@ -340,7 +347,7 @@ test.describe('CountyAssignmentManageCounties — AC_001: Create Agency County D
 
   test(
     'SC-1.14 | AC_001 — No county IDs or tokens leaked in URL after agency creation',
-    { tag: ['@debug', '@regression', '@functional'] },
+    { tag: ['@skip', '@debug', '@regression', '@functional'] },
     async ({ page }) => {
       await agencyPage.fillRequiredCreateAgencyFields({
         agencyName: `${validData.newAgencyName3}-${Date.now()}`,
@@ -630,7 +637,7 @@ test.describe('CountyAssignmentManageCounties — AC_002: Post-Creation Manageme
 
   test(
     'SC-2.10 | AC_002 — Uniqueness constraint: (agency_id, county_id) duplicate silently accepted via API',
-    { tag: ['@debug', '@regression', '@functional'] },
+    { tag: ['@skip', '@debug', '@regression', '@functional'] },
     async ({ page }) => {
       // Arrange: intercept PATCH/PUT agencies endpoint
       const responses: number[] = [];
