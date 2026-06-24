@@ -140,10 +140,10 @@ test.describe('CountyAssignmentManageCounties — AC_001: Create Agency County D
 
   test.beforeEach(async ({ page }) => {
     agencyPage = new CountyAssignmentManageCountiesPage(page);
-    const timestamp = Date.now();
-    testCountyName = `QA-Test-County-AL-${timestamp}`;
-    testCountyName2 = `QA-Test-County-AR-${timestamp}`;
-    testAgencyName = `QA-Test-Agency-${timestamp}`;
+    const uuid = crypto.randomUUID().substring(0, 8);
+    testCountyName = `AL-${uuid}-QA`;
+    testCountyName2 = `AR-${uuid}-QA`;
+    testAgencyName = `QA-${uuid}`;
 
     await agencyPage.loginAndNavigateToCreate(superAdmin.email, superAdmin.password);
     // Create Alabama county
