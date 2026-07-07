@@ -30,21 +30,28 @@ Zoho Task (ID)  |  Local Document  |  Live URL
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  Agent 2 — Locator Agent                                                    │
 │  Trigger: Run Agent 2 for <FeatureName>                                     │
-│  • Runs npm run extract-locators against the live app (headless)            │
-│  • DOM-eval for structural elements (headings, sections, footer…)           │
-│  • Playwright Codegen fallback for dynamic/post-interaction elements        │
-│  • Flags MISSING elements; blocks on P1 gaps                                │
+│  • Runs npm run extract-locators — ONE browser session per page captures:   │
+│    interactive elements (DOM scan), structural elements (headings, nav…),   │
+│    dynamic elements (driven by declarative interactions.json), and          │
+│    same-session uniqueness validation (matchCount per selector)             │
+│  • Playwright Codegen is last-resort only (element unreachable declaratively)│
+│  • Flags status: missing entries; blocks on P1 gaps                         │
+│  • DOM-hash cache skips unchanged pages (.extract_cache.json; --force)      │
 │  OUTPUT → features/{FeatureName}/locators/{FeatureName}_locators.json       │
+│           locators/interactions.json + extract_{Feature}_auto.json (audit)  │
 └─────────────────────────────────────────────────────────────────────────────┘
       │
       ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  Agent 3 — Playwright Generator                                             │
 │  Trigger: Run Agent 3 for <FeatureName>                                     │
-│  • Generates Page Object Models, test suite, and test data JSON             │
+│  • Generates thin page objects extending shared/pages/BasePage.ts —         │
+│    locators resolve at runtime (codegenForm → primary → fallback via .or()) │
+│  • Generates test suite + test data JSON; never invents selectors           │
 │  • Tags every test (@smoke / @regression / @functional / @security)         │
-│  • Uses only locators from the JSON — never invents selectors               │
-│  • Skips MISSING locators with // TODO(Agent2-rerun) comments               │
+│  • Skips missing locators with // TODO(Agent2-rerun) comments               │
+│  • Self-heal loop: runs the tests, reads results.json, repairs automation   │
+│    failures (up to 3 rounds) before hand-off to Agent 4                     │
 │  OUTPUT → features/{FeatureName}/pages/, tests/, testData/                  │
 └─────────────────────────────────────────────────────────────────────────────┘
       │
@@ -68,6 +75,7 @@ Zoho Task (ID)  |  Local Document  |  Live URL
 │  • Reads all_issues/issues_{FeatureName}_*.md                               │
 │  • Deduplicates against sync_log.json + live Zoho API                       │
 │  • Creates Zoho bug issues via REST API (OAuth — no MCP connector)          │
+│  • Attaches the mandatory "AI identified" tag to every created issue        │
 │  • Appends to zoho/sync_log.json (append-only, source of truth)             │
 │  OUTPUT → Zoho Project Issues                                               │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -86,6 +94,12 @@ Zoho Task (ID)  |  Local Document  |  Live URL
 ### Installation
 
 ```bash
+npm run setup        # one-shot: npm install + cp .env.example .env + playwright install
+```
+
+Or step by step:
+
+```bash
 npm install
 npx playwright install chromium
 cp .env.example .env
@@ -96,11 +110,15 @@ Fill in `.env`:
 | Variable | Description |
 |---|---|
 | `BASE_URL` | App under test (e.g. `https://staging.yourapp.com`) |
+| `SIGN_IN_URL` | Admin/portal login URL (used for admin-side features) |
+| `TEST_USER_EMAIL` / `TEST_USER_PASSWORD` | Provisioned test login for the app |
+| `TEST_EMAIL_BASE` | Real monitored inbox — `generateTestEmail()` derives unique `+alias` addresses for form fills |
 | `ZOHO_CLIENT_ID` | From https://api-console.zoho.com → Self Client |
 | `ZOHO_CLIENT_SECRET` | Same source |
 | `ZOHO_REFRESH_TOKEN` | Exchange a grant code once; keep it (see `.env.example`) |
 | `ZOHO_PORTAL_ID` | Numeric portal ID from your Zoho Projects URL |
 | `ZOHO_PROJECT_ID` | Numeric project ID from your Zoho Projects URL |
+| `ZOHO_BASE_URL` | Zoho Projects API base (e.g. `https://projectsapi.zoho.com`) |
 
 > See `.env.example` for the full step-by-step guide to generating OAuth credentials.
 
@@ -114,17 +132,18 @@ Fill in `.env`:
 │   ├── 2_Locator_Agent.md
 │   ├── 3_Playwright_Generator_Agent.md
 │   ├── 4_Bug_Report_Generator_Agent.md
-│   └── 5_Zoho_MCP_Agent.md
+│   └── 5_Zoho_Sync_Agent.md
 │
-├── features/                             # One folder per feature
+├── features/                             # One folder per feature (gitignored — generated per-machine)
 │   └── {FeatureName}/
 │       ├── feature.config.json           # Feature bootstrap (used by Agents 2–5)
 │       ├── spec/QA_{FeatureName}.md      # Agent 1 output — QA specification
 │       ├── locators/
-│       │   ├── extract_{Feature}_auto.json   # Auto-extractor output
-│       │   └── {FeatureName}_locators.json   # Final locator map
-│       ├── pages/{PageName}Page.ts       # Page Object Model(s)
-│       ├── tests/feature_{name}.spec.ts  # Playwright test suite
+│       │   ├── {FeatureName}_locators.json   # Final locator map
+│       │   ├── interactions.json             # Declarative dynamic-element triggers
+│       │   └── extract_{Feature}_auto.json   # Auto-extractor audit snapshot
+│       ├── pages/{PageName}Page.ts       # Thin page object (extends BasePage)
+│       ├── tests/feature_{feature_name}.spec.ts  # Test suite (split into _{group}.spec.ts if large)
 │       ├── testData/{feature_name}.json  # Test data
 │       └── bugReports/QA_RUN_REPORT.md  # Agent 4 output
 │
@@ -132,15 +151,24 @@ Fill in `.env`:
 │   └── issues_{FeatureName}_AC_XXX_SCXX.md
 │
 ├── scripts/
-│   └── auto_locator_extractor.js         # Headless DOM crawler (Agent 2)
+│   └── auto_locator_extractor.js         # Single-session locator extractor (Agent 2)
 │
-├── shared/utils/ConfigLoader.ts          # Type-safe locator + test data loader
+├── shared/
+│   ├── pages/BasePage.ts                 # Page-object base — runtime locator resolution
+│   ├── utils/ConfigLoader.ts             # Locator/testData loader + codegenForm→primary→fallback .or() chain
+│   ├── utils/waits.ts                    # Deterministic waits (no waitForTimeout)
+│   ├── utils/timeouts.ts                 # ACTION/NAV/SETTLE timeouts (env-overridable)
+│   ├── utils/testData.ts                 # generateTestEmail() — deliverable +alias emails
+│   ├── assertions/common.ts              # Timeout-wrapped expect helpers
+│   └── auth/                             # Opt-in global login + storageState (disabled by default)
 │
 ├── reports/                              # Playwright output (gitignored)
 │   ├── test-results/                     # Screenshots, videos, traces, JSON, JUnit
 │   └── playwright-report/                # HTML report
 │
 ├── zoho/
+│   ├── config.json.example               # Picklist IDs (severity/classification), AI-identified tag, severity map
+│   ├── config.json                       # Your copy (gitignored)
 │   └── sync_log.json                     # Append-only duplicate-detection log
 │
 ├── CLAUDE.md                             # Claude Code instructions (auto-loaded)
@@ -166,7 +194,9 @@ Fill in `.env`:
 | Agent 4 | `Run Agent 4 for <FeatureName>` | — |
 | Agent 5 | `Run Agent 5 for <FeatureName>` | — |
 
-**Update mode** applies minimum edits to existing specs, locators, and tests — unchanged scenarios are never touched.
+**Update mode** applies minimum edits to existing specs, locators, and tests — unchanged scenarios are never touched. Agent 1 writes the AC diff to `features/{FeatureName}/.ac_changes.json`; Agents 2 and 3 read it to know exactly what to re-extract and regenerate.
+
+**Agent 2 URL mode** can optionally continue the full pipeline after extraction — Agent 3 → run tests → Agent 4 — in a single run.
 
 ### Agent 1 Input Modes
 
@@ -188,11 +218,15 @@ npx playwright test features/{FeatureName}/tests/ --project=chromium
 npm test
 
 # By tag
-npx playwright test --grep @smoke
-npx playwright test --grep @regression
+npm run test:smoke
+npm run test:regression
+npm run test:functional
+npm run test:security
 
-# Headed (browser visible)
+# Headed / interactive
 npx playwright test features/{FeatureName}/tests/ --headed
+npm run test:ui      # Playwright UI mode
+npm run test:debug   # Inspector
 
 # Open HTML report
 npm run show-report
@@ -202,14 +236,18 @@ npm run show-report
 
 ---
 
-## Locator Source Priority (Agent 2)
+## Locator Sources (Agent 2)
 
-| Priority | Source | Used for |
-|---|---|---|
-| 1 | Auto-extractor | Interactive elements (buttons, inputs, links) |
-| 2 | DOM evaluation | Structural elements (headings, sections, header, footer) |
-| 3 | Playwright Codegen | Dynamic elements (modals, toasts, post-submit states) |
-| 4 | `MISSING` | Uncapturable — flagged, tests skip with `// TODO(Agent2-rerun)` |
+All captured in a single browser session per page. Each locator entry records its `source` and `status`:
+
+| `source` | Used for |
+|---|---|
+| `dom-scan` | Interactive elements (buttons, inputs, links) |
+| `structural` | Headings, sections, nav, landmarks, images |
+| `interaction` | Dynamic elements (modals, toasts, post-submit states) — driven by declarative `interactions.json` |
+| `codegen` | Last resort only, when an element can't be reached declaratively |
+
+Uncapturable elements get `status: missing` — flagged, and tests skip them with `// TODO(Agent2-rerun)`.
 
 ---
 
@@ -226,7 +264,9 @@ npm run show-report
 
 ## Timeouts
 
-All set globally in `playwright.config.ts` — 90 000 ms for tests, assertions, actions, and navigation.
+Defined in `shared/utils/timeouts.ts` — `ACTION_TIMEOUT` and `NAV_TIMEOUT` default to 90 000 ms, `SETTLE_TIMEOUT` to 5 000 ms — each overridable via `.env`. `playwright.config.ts` consumes the same values globally.
+
+`page.waitForTimeout` is banned in generated tests — use the deterministic helpers in `shared/utils/waits.ts` (`waitForStable`, `waitForEnabled`, `waitForVisibleAny`, `waitForGone`).
 
 ---
 

@@ -1,0 +1,18 @@
+{
+  "enabled": false,
+  "_comment": "Generic global-auth config. Set enabled=true to log in ONCE before the suite and reuse the session via storageState (skips per-test login). Expressions are Playwright locator expressions referencing `page`; credentials are read from the named .env vars. Disabled by default so features with their own per-test login (e.g. EnergyAuditorAuthentication) keep working unchanged.",
+  "loginUrl": "/",
+  "username": {
+    "expr": "page.getByRole('textbox', { name: /email|username/i }).first()",
+    "envVar": "TEST_USER_EMAIL"
+  },
+  "password": {
+    "expr": "page.getByRole('textbox', { name: /password/i }).first()",
+    "envVar": "TEST_USER_PASSWORD"
+  },
+  "submit": {
+    "expr": "page.getByRole('button', { name: /sign in|log in|login/i }).first()"
+  },
+  "successUrlContains": "/",
+  "storageStatePath": ".auth/state.json"
+}

@@ -208,6 +208,7 @@ Write to `features/{FeatureName}/spec/QA_{FeatureName}.md`:
 ## Validation Rules
 1. All ACs/scenarios trace to the input source (Zoho task text · document content · DOM elements) — no fabrication
 2. No hardcoded credentials or real URLs — use `{base_url}` placeholder
+   - Deliverable emails (form-fill fields the app sends mail to) must specify the runtime convention `generateTestEmail()` → a unique `{local}+{DDMMM}{nnn}@{domain}` alias of `TEST_EMAIL_BASE` (.env), never a dummy/disposable domain (`@yopmail.com`, `@mailinator.com`, `@example.com`). Negative/boundary email cases may stay invalid by design.
 3. PascalCase and snake_case consistent throughout
 4. Every scenario has steps + expected result — partial entries unacceptable
 5. Every element referenced in any scenario step appears in the UI Element Inventory

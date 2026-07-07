@@ -6,11 +6,21 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import type { Page, Locator } from '@playwright/test';
 
 interface LocatorConfig {
+  /** Codegen-verified expression — highest priority when present and not a placeholder. */
+  codegenForm?: string;
   primary: string;
   fallback?: string;
   description?: string;
+}
+
+/** Values that mark a locator field as "not a real selector" — skipped during resolution. */
+const PLACEHOLDER_VALUES = new Set(['', 'MISSING', 'FINDING', 'PENDING', 'TODO']);
+
+function isRealExpr(expr?: string): expr is string {
+  return typeof expr === 'string' && !PLACEHOLDER_VALUES.has(expr.trim());
 }
 
 interface FeatureConfig {
@@ -149,6 +159,79 @@ export class ConfigLoader {
     }
 
     return config[pageName];
+  }
+
+  /**
+   * Evaluate a stored Playwright locator expression string (e.g.
+   * "page.getByRole('button', { name: 'Save' })") into a live Locator.
+   * The expression references `page` only; locator JSON is trusted in-repo config.
+   * @param page - Playwright Page
+   * @param expr - A Playwright locator expression as a string
+   * @returns The resolved Locator
+   */
+  static evalLocatorExpr(page: Page, expr: string): Locator {
+    // eslint-disable-next-line no-new-func
+    const fn = new Function('page', `return (${expr});`) as (p: Page) => Locator;
+    return fn(page);
+  }
+
+  /**
+   * Resolve a locator entry into a single live Locator with RUNTIME fallback.
+   * Tries codegenForm → primary → fallback, chaining them with Playwright's
+   * native `.or()` so whichever actually matches the live DOM is used at
+   * execution time (instead of choosing one at generation time).
+   * @param page - Playwright Page
+   * @param entry - A locator config entry (or page+element keys)
+   * @returns A Locator matching the first available candidate that resolves
+   * @throws Error if the entry has no real selector candidates
+   */
+  static toLocator(page: Page, entry: LocatorConfig): Locator {
+    const candidates = [entry.codegenForm, entry.primary, entry.fallback].filter(isRealExpr);
+    if (candidates.length === 0) {
+      throw new Error(
+        `Locator entry has no usable selector (codegenForm/primary/fallback all missing): ` +
+        `${JSON.stringify(entry)}`
+      );
+    }
+    let resolved: Locator | undefined;
+    for (const expr of candidates) {
+      const candidate = this.evalLocatorExpr(page, expr);
+      resolved = resolved ? resolved.or(candidate) : candidate;
+    }
+    return resolved as Locator;
+  }
+
+  /**
+   * Convenience: resolve a locator by feature/page/element keys into a live Locator
+   * with runtime fallback. Used by BasePage.
+   */
+  static resolveLocator(
+    page: Page,
+    featureName: string,
+    pageName: string,
+    elementName: string
+  ): Locator {
+    return this.toLocator(page, this.getElement(featureName, pageName, elementName));
+  }
+
+  /**
+   * Get the raw locator entry object for a feature/page/element.
+   */
+  static getElement(
+    featureName: string,
+    pageName: string,
+    elementName: string
+  ): LocatorConfig {
+    const config = this.loadLocators(featureName);
+    if (!config[pageName]) {
+      throw new Error(`Page '${pageName}' not found in ${featureName} locators`);
+    }
+    if (!config[pageName][elementName]) {
+      throw new Error(
+        `Element '${elementName}' not found for page '${pageName}' in ${featureName} locators`
+      );
+    }
+    return config[pageName][elementName] as LocatorConfig;
   }
 
   /**

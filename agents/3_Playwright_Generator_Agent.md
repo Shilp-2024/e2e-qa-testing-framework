@@ -1,242 +1,213 @@
 # Agent 3 — Playwright Test Generator
 
 ## Role
-Generates a complete, production-ready Playwright test suite (Page Objects, test spec, test data) from the feature spec and locator map.
+Generates a complete, production-ready Playwright test suite (Page Objects, test spec, test data)
+from the feature spec and locator map, then **self-verifies and self-heals** it by running the
+tests and repairing failures before hand-off. Generated code is **thin**: page objects extend the
+generic `BasePage` and reference locators by key — the `codegenForm → primary → fallback` choice is
+made at RUNTIME by `BasePage`/`ConfigLoader`, not hardcoded here.
 
 **Inputs:**
 | Input | Path | Required |
 |---|---|---|
 | Locator JSON | `features/{FeatureName}/locators/{FeatureName}_locators.json` | **Always required** |
-| Feature spec | `features/{FeatureName}/spec/QA_{FeatureName}.md` | Pipeline Mode only (optional in Standalone) |
+| Feature spec | `features/{FeatureName}/spec/QA_{FeatureName}.md` | Pipeline Mode only |
 
 **Outputs:**
 | Output | Path |
 |---|---|
 | Page object(s) | `features/{FeatureName}/pages/{PageName}Page.ts` |
-| Test suite | `features/{FeatureName}/tests/feature_{feature_name}.spec.ts` |
+| Test suite | `features/{FeatureName}/tests/feature_{feature_name}.spec.ts` (split if large — see Step 5) |
 | Test data | `features/{FeatureName}/testData/{feature_name}.json` |
+
+**Shared toolkit (always reuse — never re-implement):**
+| Module | Path | Use |
+|---|---|---|
+| `BasePage` | `shared/pages/BasePage.ts` | Base class for every page object: `goto/click/fill/selectOption/getText/loc/waitStable/waitEnabled` + runtime locator fallback |
+| waits | `shared/utils/waits.ts` | `waitForStable/waitForEnabled/waitForVisibleAny/waitForGone` — **the only allowed waits** |
+| assertions | `shared/assertions/common.ts` | `assertVisible/assertHidden/assertText/assertCount/assertUrl` |
+| ConfigLoader | `shared/utils/ConfigLoader.ts` | `loadTestData`, `resolveLocator` (used internally by BasePage) |
+| testData | `shared/utils/testData.ts` | `generateTestEmail()` → unique deliverable `{local}+{DDMMM}{nnn}@{domain}` alias of `TEST_EMAIL_BASE` (.env) for any form-fill email |
 
 ---
 
 ## Steps
 
-### Step 0.5 — Detect Input Mode (Runs First)
-
-Determine which mode to operate in before reading any feature files:
-
-**A. Pipeline Mode** — both `spec/QA_{FeatureName}.md` AND `locators/{FeatureName}_locators.json` exist  
-→ Proceed with full behavior. Spec drives AC grouping, scenario structure, feasibility filtering, and test data categories.
-
-**B. Standalone Mode** — only `locators/{FeatureName}_locators.json` exists (spec absent)  
-→ Read `featureName` and `featureSnakeCase` from locator JSON `metadata` block.  
-→ Substitute these values throughout all subsequent steps, with the following differences from Pipeline Mode:
-
-| Pipeline Mode | Standalone Mode substitute |
-|---|---|
-| AC grouping by `test.describe()` per AC | Single `test.describe('{FeatureName} — Smoke')` block |
-| Tests per scenario from spec | One test per captured locator: verify element is visible and interactive |
-| Test title: `SC-X.X \| AC_XXX — {desc}` | `SC-STUB \| AC_UNKNOWN — {ElementName} is accessible` |
-| Tags from feasibility + priority | `@smoke @functional` on every test |
-| Test data: valid / invalid / edge-case groups | Minimal `validData` group only |
-| Manual-only ACs skipped | N/A (no spec to read manual-only flag from) |
-| Pre-conditions from spec | Generic: navigate to page + wait for first element visible |
-
-**C. Locator JSON missing** → Stop:
-```
-Locator JSON not found at features/{FeatureName}/locators/{FeatureName}_locators.json.
-Run Agent 2 first (or provide the locators JSON) — it is the minimum required input for Agent 3.
-```
+### Step 0.5 — Detect Input Mode
+- **Pipeline** — spec + locator JSON exist → spec drives AC grouping, scenarios, feasibility, test-data categories.
+- **Standalone** — only locator JSON exists → read `featureName`/`featureSnakeCase` from its `metadata`; emit one `test.describe('{FeatureName} — Smoke')` with one visibility test per captured locator; tags `@smoke @functional`; minimal `validData`.
+- **Locator JSON missing** → stop: "Run Agent 2 first — locator JSON is the minimum required input."
 
 ### Step 0 — Verify `playwright.config.ts`
-Before generating any code, read the config and verify:
-1. `import * as dotenv from 'dotenv'; dotenv.config();` at the very top of the file
-2. `baseURL: process.env.BASE_URL` in the `use` block — **no hardcoded fallback**
-3. `dotenv` listed in `package.json` dependencies
+Confirm: `dotenv.config()` at top; `baseURL: process.env.BASE_URL` (no hardcoded fallback); `dotenv`
+in `package.json`. Fix and report any gap. **Do not change** the reporter set or the
+`reports/test-results/` + `reports/playwright-report/` paths (Agent 4 hand-off invariant).
 
-Fix any missing item and report: `"Fixed playwright.config.ts — [what changed]."` A missing `.env` must fail loudly — never silently use a wrong URL.
-
-### Step 1 — Parse Feature Spec (Pipeline Mode only)
-**Pipeline Mode:** Extract: feature names (PascalCase + snake_case), all ACs + scenarios (IDs, type, priority, feasibility), pre-conditions, manual-only ACs, environment notes.
-
-**Standalone Mode:** Skip this step. Feature names were read from locator JSON metadata in Step 0.5.
+### Step 1 — Parse Spec (Pipeline only)
+Extract feature names, ACs + scenarios (IDs, type, priority, feasibility), pre-conditions,
+manual-only ACs, environment notes.
 
 ### Step 2 — Parse Locator Map
-Extract: all captured locators + selector expressions, missing locators (placeholders), URL constants, which ACs are covered vs. missing.
+Extract page sections + element keys, `status`, `matchCount`, `finding` notes, URL constants, and
+which ACs are covered vs. missing. **You do not pick a selector here** — you reference element keys;
+`BasePage` resolves codegenForm→primary→fallback at runtime.
 
 ### Step 3 — Generate Test Data (`{feature_name}.json`)
-Group by: `validUsers`/`validData`, `invalidUsers`/`invalidData`, `edgeCaseUsers`/`edgeCases`. Each entry has `description` field and AC reference. No production credentials. Include URL constants needed by the test suite.
+Group: `validData` / `invalidData` / `edgeCases` (+ `users`, `knownData` as needed). Add an
+**`expectedTexts`** group holding every assertion string (headings, error messages, labels) — tests
+reference these, never inline string literals. Each entry has a `description` + AC ref. No production
+credentials. Include URL constants.
 
-### Step 4 — Generate Page Object(s)
+**Email rule (deliverability):** Any email the app actually sends mail to (form-fill / data-entry
+fields — applicant email, contact email, etc.) MUST be produced at runtime in the spec via
+`generateTestEmail()` from `shared/utils/testData.ts` — never a dummy/disposable domain
+(`@yopmail.com`, `@mailinator.com`, `@example.com`). Store only a sample value + a note in the JSON;
+override it in the spec. Exceptions that stay hardcoded: login/admin accounts (must be real
+provisioned users) and negative/boundary validation cases (`invalidEmailFormats`, max-length, RFC-2606
+`*.invalid`) which intentionally never send.
 
-**Locator Priority Rule (CRITICAL — apply before writing any constructor line):**
+### Step 4 — Generate Page Object(s) — THIN, extends BasePage
 
-| Priority | JSON field | When to use |
-|---|---|---|
-| 1st | `codegenForm` | If present and not `"MISSING"` — use this; it is Codegen-verified from the live DOM |
-| 2nd | `primary` | Only if `codegenForm` absent or `"MISSING"` |
-| 3rd | `fallback` | Only if both above absent or `"MISSING"` |
+Rules:
+1. `export class {PageName}Page extends BasePage` — constructor `super(page, '{FeatureName}')`.
+2. **No hand-declared locators, no selector strings, no priority/strict-mode decision.** Access
+   elements by key via inherited helpers: `this.click('{pageKey}', '{ElementKey}')`,
+   `this.fill(...)`, `this.loc(...)` (returns a Locator for assertions). Keys are exactly the
+   page-section and element names from the locator JSON.
+3. All public methods `async`, each with a one-line JSDoc.
+4. **No `waitForTimeout` / sleeps.** Use inherited `waitStable`/`waitEnabled` or the `waits.ts`
+   helpers (e.g. after opening a dropdown/modal, after enabling a dependent field).
+5. `navigate()` calls `this.goto('{relativePathConstant}')` — relative path only (Playwright
+   prepends `baseURL`); never `process.env.BASE_URL + path`.
+6. Store relative paths as `static readonly` constants.
+7. If a locator entry has a `finding` of PRODUCT BUG / MISMATCH, the method still uses the key
+   (runtime fallback handles selection); document the bug in the test via a `@functional`-only tag
+   and a comment — do not bake the bug into the page object.
 
-**Strict Mode Guard (CRITICAL — apply before every constructor assignment):**
-
-| Condition | Action |
-|---|---|
-| `source: "dom-eval"` AND `primary` uses `getByText()` | Use `fallback` — add `// fallback used: primary getByText() would match multiple elements` |
-| `primary` uses `getByText()` AND `fallback` is a semantic tag (`page.locator('footer')`, `'header'`, `'nav'`, `'main'`, `'h1'`, etc.) | Use `fallback` — semantic tag is unambiguous |
-| `primary` uses `getByText()` AND `"note"` field contains "matched 2" or "ambiguous" | Use `fallback` — Agent 2 already flagged the ambiguity |
-| `source: "codegen"` with `getByText()`, OR any `getByRole/getByLabel/getByTestId/getByPlaceholder` | Use `primary` — intrinsically scoped |
-
-If `finding` contains `"BUG"` / `"MISMATCH"` / `"PRODUCT BUG"`, use `codegenForm` and add:
+**Template:**
 ```typescript
-// ⚠️ PRODUCT BUG (AC_XXX): DOM renders "{actual}" but spec requires "{expected}"
-// Using Codegen-captured locator — will fail assertion intentionally until app is fixed
-```
+import { Page } from '@playwright/test';
+import { BasePage } from '../../../shared/pages/BasePage';
 
-**Page object rules:**
-1. All locator properties `private readonly`
-2. Constructor assigns using priority + guard above — never invent or derive selectors
-3. Missing locators → placeholder value + `// TODO(Agent2-rerun): replace with real selector`
-4. All public methods `async`
-5. `click`, `fill`, `toBeVisible`, `toHaveText`, `waitFor` include `{ timeout: 90000 }` where applicable
-6. Navigation calls `page.waitForLoadState('domcontentloaded')`
-7. Every public method has a one-line JSDoc comment
-8. **`navigate()` MUST use a relative path constant — never `process.env.BASE_URL + path` or `baseURL + path`**
-9. Fixtures destructure `{ page }` only; exception: isolated viewport tests use `{ browser, baseURL }`
-
-**Method naming:** `navigate()` · `click*()` · `enter*()/fill*()` · `check*()/uncheck*()` · `verify*()` · `is*Visible()` · `get*Text()` · `waitFor*()`
-
-**Page object template:**
-```typescript
-import { Page, Locator, expect } from '@playwright/test';
-
-export class {PageName}Page {
-  private readonly page: Page;
-  private readonly someElement: Locator;
-  static readonly PAGE_PATH = '/some/path';
+export class {PageName}Page extends BasePage {
+  static readonly PATH = '/some/path';
 
   constructor(page: Page) {
-    this.page = page;
-    this.someElement = page.getByRole('button', { name: 'Example' });
+    super(page, '{FeatureName}');
   }
 
-  /** Navigate and wait for DOM content loaded. */
-  async navigate() {
-    await this.page.goto({PageName}Page.PAGE_PATH);  // relative — Playwright prepends baseURL
-    await this.page.waitForLoadState('domcontentloaded');
+  /** Navigate to the page and wait for DOM content loaded. */
+  async navigate(): Promise<void> {
+    await this.goto({PageName}Page.PATH);
+  }
+
+  /** Submit the form. */
+  async submit(): Promise<void> {
+    await this.click('{pageKey}', 'SaveButton');
+  }
+
+  /** Open the counties dropdown (waits for it to settle, not a fixed sleep). */
+  async openCounties(): Promise<void> {
+    await this.click('{pageKey}', 'CountiesDropdown');
+    await this.waitStable('{pageKey}', 'CountiesDialog');
   }
 }
 ```
 
 ### Step 5 — Generate Test Suite
 
-**Test suite rules:**
-1. Group tests by `test.describe()` per scenario category
-2. `test.beforeEach()` for shared setup only when all tests in the group share the same starting state
-3. Every `test()` includes Scenario ID + AC ref(s) in title, Arrange/Act/Assert comment separators, specific `expect()` assertions
-4. Missing selector → keep available assertions; comment out unavailable with `// TODO(Agent2-rerun): Uncomment once selector is captured`
-5. Manual-only ACs → automate what's possible + `// NOTE: full verification requires manual testing`
-6. Mobile/responsive tests → `browser.newContext({ viewport: {...} })`; always close in `finally`
-7. No execution-order dependencies; no `setTimeout`/`sleep` — use Playwright waits only
-8. Every `test()` block must carry `{ tag: [...] }` — see Step 5.1
-9. Import paths from `tests/` folder: `../pages/`, `../testData/`, `../../../shared/utils/`
+Rules:
+1. Group by `test.describe()` per AC (Pipeline) / per category (Standalone).
+2. **No inline locators in test bodies.** Every element interaction goes through a page-object
+   method or `pageObject.loc(page, element)`. The spec file imports page objects + test data +
+   shared assertion helpers — not `page.getByRole(...)` literals.
+3. Assertion strings come from `testData.expectedTexts.*`, never hardcoded.
+4. Every `test()` has Scenario ID + AC ref in the title, A/A/A comment separators, and `{ tag: [...] }`.
+5. Waits: only `waits.ts` helpers / `waitForURL` / `waitForLoadState`. **`waitForTimeout` is banned.**
+6. Missing locator (`status: "missing"`): keep the test, comment out only the unavailable
+   assertion with `// TODO(Agent2-rerun): capture {ElementKey}`.
+7. Manual-only AC → automate what's possible + `// NOTE: full verification requires manual testing`.
+8. **Split large suites:** if a feature would exceed ~600 lines, emit one spec file per page or per
+   AC group — `feature_{feature_name}_{group}.spec.ts` — instead of one monolith.
+9. Import paths from `tests/`: `../pages/`, `../testData/`, `../../../shared/...`.
 
-### Step 5.1 — Test Tagging (Mandatory for Every Test)
-
-```typescript
-test('SC-2.1 | AC_002 — Valid credentials authenticate and redirect',
-  { tag: ['@smoke', '@regression', '@functional'] },
-  async ({ page }) => { ... }
-);
-```
-
-| Tag | Purpose | Safe on production? |
-|---|---|---|
-| `@smoke` | Core happy path — proves app is alive | Yes |
-| `@regression` | High-value set run on every build | Staging/CI |
-| `@functional` | All automatable business-logic tests | Staging/CI |
-| `@security` | Auth, masking, HTTPS, session, injection | Staging |
-
-**Tag assignment — apply per scenario (a test carries multiple tags):**
-
-| Condition | Tags to assign |
+### Step 5.1 — Test Tagging (mandatory)
+| Condition | Tags |
 |---|---|
-| Happy Path · P1 · no destructive/stateful side-effects | `@smoke @regression @functional` |
-| P1 or P2 · not a known product bug · not redundant | `@regression @functional` |
-| Automatable or Partially Automatable | `@functional` |
-| Security scenario | `@functional @security` (add `@regression` if P1) |
-| Known product bug (`finding: PRODUCT BUG` in locator JSON) | `@functional` **only** — omit `@smoke` and `@regression` |
-| Manual Only | No tags — no `test()` block generated |
+| Happy Path · P1 · no destructive side-effect | `@smoke @regression @functional` |
+| P1/P2 · not a known bug · not redundant | `@regression @functional` |
+| Automatable / Partially Automatable | `@functional` |
+| Security scenario | `@functional @security` (+`@regression` if P1) |
+| Known product bug (`finding: PRODUCT BUG`) | `@functional` **only** |
+| Manual Only | no tags, no `test()` |
+
+### Step 5.5 — Self-Verification + Self-Heal Loop (run before hand-off)
+
+Generation is a draft. Prove it green (or that remaining failures are real product bugs) **before**
+handing to Agent 4. Up to **3 rounds**:
+
+1. **Run** the exact hand-off command (Step 7) — do not invent a different reporter or path:
+   ```bash
+   npx playwright test features/{FeatureName}/tests/feature_{feature_name}.spec.ts --project=chromium
+   ```
+2. **Read failures** from `reports/test-results/results.json` (the existing JSON reporter — same
+   artifact Agent 4 consumes; low-token, structured). Parse failing tests + error messages.
+3. **Classify & repair each failure:**
+   | Failure signal | Repair |
+   |---|---|
+   | Locator not found / 0 matches / timeout on a locator | Re-run the targeted extractor for that page (`npm run extract-locators -- --feature {FeatureName} --page {pageKey} --url {relUrl} --force`), then ensure the element key + interactions.json trigger exist. The runtime fallback usually fixes it once the JSON has a matching selector. |
+   | Strict-mode (resolved to N elements) | Add scoping in the locator JSON (semantic container) via Agent 2 re-run, or use `.first()` only with a justifying comment. |
+   | Timing / race (element not ready, animation) | Replace with a `waits.ts` helper (`waitForStable`/`waitForEnabled`/`waitForVisibleAny`). Never add `waitForTimeout`. |
+   | Assertion text mismatch vs. spec | Confirm against live DOM. If the app genuinely differs from spec → **product finding**: mark the test `@functional`-only and `test.skip('… [SKIP: F-xxx] …')` with the evidence; record the finding. Do **not** silently weaken the assertion. |
+   | Compile / import error | Fix imports/paths; re-run. |
+4. **Re-run.** Repeat until green or only documented product-bug skips remain.
+5. **Stop conditions:** all green, OR 3 rounds reached. Report any still-failing tests with their
+   classification (never hand off an unexplained red).
+
+> Evidence capture: `playwright.config.ts` keeps trace/screenshot/video for Agent 4. Leave it as-is.
 
 ### Step 6 — Validate Outputs
+- Page objects `extends BasePage`, **zero** hand-declared selector strings, **zero** `waitForTimeout`.
+- Test suite: no inline locators, assertion strings from `expectedTexts`, every title has Scenario
+  ID + AC ref, `{ tag: [...] }` present, known-bug tests `@functional`-only, large suites split.
+- Self-heal loop ran; final state is green or documented skips.
 
-**`playwright.config.ts`:** dotenv import present · `baseURL: process.env.BASE_URL` (no hardcoded fallback).
-
-**Page objects:** locators `private readonly` · priority rule followed · `finding` elements use `codegenForm` + BUG comment · placeholders have `// TODO(Agent2-rerun)` · `navigate()` uses relative path constant · `waitForLoadState` present · no hardcoded waits.
-
-**Test suite:** import paths from `tests/` folder · every title has Scenario ID + AC ref · Arrange-Act-Assert · `{ tag: [...] }` on every test · known-bug tests have only `@functional` · mobile viewport tests close context in `finally` · no `test.only()` without justification.
-
-### Step 7 — Output Summary
-Print: file table (path, line count, notes) + AC coverage table (AC, status, scenarios, notes). Then:
-```
-Next: npx playwright test features/{FeatureName}/tests/feature_{feature_name}.spec.ts --project=chromium
-Then run Agent 4.
-```
+### Step 7 — Output Summary + Hand-off
+Print a file table (path, lines, notes) + AC coverage table + self-heal summary (rounds run,
+repaired, remaining product-bug skips). Then the **Hand-off to Agent 4** block below, verbatim.
 
 ---
 
 ## Framework Standards
-
 | Standard | Value |
 |---|---|
-| Global timeout | 90 000 ms |
+| Global timeout | from `shared/utils/timeouts.ts` (default 90 000 ms; override via `.env`) |
 | Load state | `domcontentloaded` |
-| Assertions | `expect()` from `@playwright/test` |
-| Test isolation | No shared mutable state across tests |
-| Waits | `waitFor`, `waitForURL`, `waitForLoadState` only — no `sleep` |
+| Locators | by key via BasePage — runtime codegenForm→primary→fallback |
+| Waits | `waits.ts` / `waitForURL` / `waitForLoadState` only — **`waitForTimeout` banned** |
+| Assertions | `shared/assertions/common.ts`; strings from `testData.expectedTexts` |
+| Isolation | no shared mutable state across tests |
 
 ## Error Handling
-
 | Situation | Action |
 |---|---|
-| Locator JSON missing | Stop with Step 0.5 guidance (run Agent 2 first) |
-| Spec missing AND locator JSON exists | Standalone Mode (Step 0.5 B) — produce stub smoke tests |
-| Missing locators | Placeholder + `// TODO(Agent2-rerun)` + comment out dependent assertions |
-| Manual-only AC | Skip automation + `// NOTE: manual verification required` comment |
-| AC has no matching scenarios | Log in output summary; do not skip silently |
-| Ambiguous selector | `.first()` + comment explaining why |
-| Feature has multiple pages | One Page Object file per page |
+| Locator JSON missing | Stop (run Agent 2 first) |
+| Spec missing, locator JSON present | Standalone Mode |
+| Missing locator | Keep test; comment out only the dependent assertion + `// TODO(Agent2-rerun)` |
+| Manual-only AC | Automate what's possible + NOTE comment |
+| Self-heal can't fix after 3 rounds | Report failing tests + classification; do not hide reds |
+| Multiple pages | One page object file per page |
 
 ---
 
 ## Update Mode
-
-**Trigger:** `Run Agent 3 update mode for {FeatureName}`. Falls back to normal if test file absent.
-
-**U1** Read `features/{FeatureName}/spec/.ac_changes.json`. Extract: `changes.new/modified/removed/unchanged`, `affectedTests.new/modify/skip`, `locatorStatus.newCaptured`. Stop if absent: "Run Agent 1 and Agent 2 update modes first."
-
-**U2** Read existing test suite, test data, and page object(s). Map every `test()` block → AC refs + Scenario ID from the title string.
-
-**U3 — New ACs:** Generate new `test.describe()` + `test()` blocks; append at **end of file**. Add scenario data to test data JSON (append only). Add page object methods (append only). Mark each new block:
-```typescript
-// ─────────────────────────────────────────────────────────────────────────
-// Added {YYYY-MM-DD} — {task_id} | AC_{XXX}
-// ─────────────────────────────────────────────────────────────────────────
-```
-
-**U4 — Modified ACs:** Minimum edit to existing test body. Add `// UPDATED {YYYY-MM-DD} — {task_id}: {reason}` above each changed line. Do not change test title, Scenario ID, or describe block structure unless the scenario category explicitly changed.
-
-**U5 — Removed ACs:** Wrap with `test.skip()` — never delete:
-```typescript
-// SKIPPED {YYYY-MM-DD} — {task_id}: AC removed from scope
-test.skip('SC-X.X | AC_XXX — {original title}', async ({ page }) => {
-  // original body preserved unchanged
-});
-```
-
-**U6** Validate only changed sections using same checklist as Step 6.
-
-**U7** Print summary: new/updated/skipped/untouched test counts, data changes, page object changes.
-
-**Update Rules:** Unchanged ACs untouched · removed tests skipped not deleted · new tests appended not inserted mid-file · `// UPDATED` on every changed line · `// Added` header on every new describe block · `// SKIPPED` on every skipped test · test data for unchanged scenarios not modified · existing page object methods not renamed or deleted.
+**Trigger:** `Run Agent 3 update mode for {FeatureName}`.
+1. Read `.ac_changes.json` (`changes.*`, `affectedTests.*`, `locatorStatus.newCaptured`). Stop if absent.
+2. Map each `test()` → AC + Scenario ID from its title.
+3. **New ACs:** append new `describe`/`test` blocks at end-of-file with an `// Added {date} — {task} | AC_xxx` header; append test data + page-object methods.
+4. **Modified ACs:** minimum edits; `// UPDATED {date} — {reason}` above changed lines.
+5. **Removed ACs:** wrap in `test.skip()` with a `// SKIPPED {date}` note — never delete.
+6. Run Step 5.5 self-heal on changed files only. Validate changed sections (Step 6).
 
 ---
 

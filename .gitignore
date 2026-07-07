@@ -5,6 +5,9 @@
 .env
 .env.local
 .env.*.local
+.env.dev
+.env.stage
+.env.prod
 
 # Dependencies
 node_modules/
@@ -20,6 +23,7 @@ yarn.lock
 # Test artifacts (new structure)
 /reports/test-results/
 /reports/playwright-report/
+/reports/blob-report/
 
 # Generated run reports (per-feature) — issues now live in all_issues/ (see below)
 features/**/bugReports/QA_RUN_REPORT.md
@@ -31,6 +35,7 @@ features/
 # Zoho sync log (contains issue IDs — keep locally, not in source control) and config (contains Project ID and API key — keep locally, not in source control)
 zoho/sync_log.json
 zoho/config.json
+zoho/task_sync_log.json
 
 # Claude Code local settings (contains machine-specific paths)
 .claude/
@@ -72,3 +77,5 @@ test_files/
 
 # All generated issues (for debugging purposes, can be ignored or removed as needed)
 all_issues/**
+# Saved auth session (global storageState) — per-machine, never commit
+.auth/
