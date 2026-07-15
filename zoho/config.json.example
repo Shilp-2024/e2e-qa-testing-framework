@@ -1,9 +1,24 @@
 {
-  "portalId": "your_portal_id_here",
+  "portalId": "36485097",
   "projectId": "your_project_id_here",
   "defaultSeverity": "Minor",
   "defaultStatus": "Open",
   "defaultClassification": "Other bug",
   "defaultReproducible": "Always",
-  "issuePrefix": "BUG"
+  "issuePrefix": "BUG",
+  "aiIdentifiedTagId": "688906000088982480",
+  "severityIds": {
+    "Critical": "688906000000007003",
+    "Major": "688906000000007005",
+    "Minor": "688906000000007007"
+  },
+  "classificationIds": {
+    "Other bug": "688906000000021039"
+  },
+  "severityMap": {
+    "Critical": "Critical",
+    "High": "Major",
+    "Medium": "Minor",
+    "Low": "Minor"
+  }
 }

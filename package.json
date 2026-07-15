@@ -10,6 +10,7 @@
     "test:ui": "playwright test --ui",
     "test:report": "playwright test; npx playwright show-report reports/playwright-report",
     "show-report": "npx playwright show-report reports/playwright-report",
+    "merge-report": "npx playwright merge-reports --reporter html --reporter-option outputFolder=reports/playwright-report reports/blob-report",
     "test:feature": "playwright test --testPathPattern=features/",
     "test:smoke": "playwright test --grep @smoke --project=chromium",
     "test:regression": "playwright test --grep @regression --project=chromium",
@@ -19,7 +20,7 @@
     "setup": "npm install && npm run create-env && npm run playwright-install",
     "create-env": "cp .env.example .env",
     "playwright-install": "playwright install",
-    "clean": "rm -rf reports/test-results/* reports/playwright-report/*",
+    "clean": "rm -rf reports/test-results/* reports/playwright-report/* reports/blob-report/*",
     "lint": "eslint .",
     "format": "prettier --write ."
   },

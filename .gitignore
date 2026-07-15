@@ -1,7 +1,13 @@
+# MCP config (contains personal tokens)
+.mcp.json
+
 # Environment variables
 .env
 .env.local
 .env.*.local
+.env.dev
+.env.stage
+.env.prod
 
 # Dependencies
 node_modules/
@@ -17,15 +23,19 @@ yarn.lock
 # Test artifacts (new structure)
 /reports/test-results/
 /reports/playwright-report/
+/reports/blob-report/
 
-# Generated bug reports and sync reports (per-feature)
-features/**/bugReports/issues_*.md
-features/**/bugReports/BUG_REPORT_SUMMARY.md
-features/**/bugReports/QA_BACKLOG.md
-features/**/bugReports/BugReports_Sync_Report_*.md
+# Generated run reports (per-feature) — issues now live in all_issues/ (see below)
+features/**/bugReports/QA_RUN_REPORT.md
 
-# Zoho sync log (contains issue IDs — keep locally, not in source control)
+# Ignoring entire features directory for now, as it is a generic framework so that anyone can use it directly within their project, 
+# and it may contain various generated files that are not relevant to all users.
+features/
+
+# Zoho sync log (contains issue IDs — keep locally, not in source control) and config (contains Project ID and API key — keep locally, not in source control)
 zoho/sync_log.json
+zoho/config.json
+zoho/task_sync_log.json
 
 # Claude Code local settings (contains machine-specific paths)
 .claude/
@@ -58,3 +68,14 @@ coverage/
 # OS files
 Thumbs.db
 .DS_Store
+
+#npm-dependancies
+.npm-cache
+
+# Files stored for files uploading scenario testing
+test_files/
+
+# All generated issues (for debugging purposes, can be ignored or removed as needed)
+all_issues/**
+# Saved auth session (global storageState) — per-machine, never commit
+.auth/

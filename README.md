@@ -1,71 +1,84 @@
 # E2E QA Testing Framework
 
-A Playwright-based end-to-end testing framework powered by a **5-agent AI pipeline** that converts a Zoho task directly into running tests — and feeds failures back into Zoho as structured bug reports. Each agent is a Claude Code instruction file in `agents/`. You run them sequentially by typing a trigger phrase.
+A Playwright-based end-to-end testing framework powered by a **5-agent AI pipeline** that converts a Zoho task directly into running tests — and feeds failures back into Zoho as structured bug reports.
+
+Each agent is a Claude Code instruction file in `agents/`. Run them by typing a trigger phrase in Claude Code.
 
 ---
 
-## How the Pipeline Works
+## Pipeline Overview
 
 ```
-Zoho Task (ID)
-      │
+Zoho Task (ID)  |  Local Document  |  Live URL
+                      │
       ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  Agent 1 — Feature Analyzer                                                 │
-│  • Fetches the task from Zoho via MCP                                       │
-│  • Extracts all Acceptance Criteria (ACs) and scenarios                     │
-│  • Builds a UI Element Inventory (every element the tests must touch)       │
-│  • Outputs a structured QA spec                                             │
-│  • Runs the auto-extractor automatically (no manual step needed)            │
-│  OUTPUT → features/{FeatureName}/spec/QA_{FeatureName}.md                  │
-│           features/{FeatureName}/locators/extract_{FeatureName}_auto.json   │
+│  Trigger (Zoho):     Run Agent 1 for <ZohoTaskId> named "<TaskName>"        │
+│  Trigger (Document): Run Agent 1 for document "<path>" named "<TaskName>"   │
+│  Trigger (Explore):  Run Agent 1 explore mode for <URL> named "<TaskName>"  │
+│  • Zoho mode   — fetches task via REST API                                  │
+│  • Document mode — parses a local spec file (md, txt, pdf, html)            │
+│  • Explore mode  — crawls the live URL and infers ACs from the DOM          │
+│  • Extracts all ACs, scenarios, and UI Element Inventory                    │
+│  • Derives additional test scenarios (boundary, security, accessibility…)   │
+│  OUTPUT → features/{FeatureName}/spec/QA_{FeatureName}.md                   │
+│           features/{FeatureName}/feature.config.json                        │
 └─────────────────────────────────────────────────────────────────────────────┘
       │
       ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  Agent 2 — Locator Agent                                                    │
-│  • Reads the auto-extractor JSON (headless DOM crawl, no browser needed)    │
-│  • Cross-checks against the spec's UI Element Inventory                     │
-│  • For any missing elements (error states, post-submit banners) runs        │
-│    targeted Playwright Codegen as a fallback                                │
-│  • Produces a merged, validated locator map (JSON + Markdown)               │
-│  OUTPUT → features/{FeatureName}/locators/                                  │
+│  Trigger: Run Agent 2 for <FeatureName>                                     │
+│  • Runs npm run extract-locators — ONE browser session per page captures:   │
+│    interactive elements (DOM scan), structural elements (headings, nav…),   │
+│    dynamic elements (driven by declarative interactions.json), and          │
+│    same-session uniqueness validation (matchCount per selector)             │
+│  • Playwright Codegen is last-resort only (element unreachable declaratively)│
+│  • Flags status: missing entries; blocks on P1 gaps                         │
+│  • DOM-hash cache skips unchanged pages (.extract_cache.json; --force)      │
+│  OUTPUT → features/{FeatureName}/locators/{FeatureName}_locators.json       │
+│           locators/interactions.json + extract_{Feature}_auto.json (audit)  │
 └─────────────────────────────────────────────────────────────────────────────┘
       │
       ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  Agent 3 — Playwright Generator                                             │
-│  • Reads the QA spec + locator map                                          │
-│  • Generates Page Object Models, the test suite, and test data JSON        │
-│  • Tags every test (@smoke / @regression / @functional / @security)        │
-│  • Uses only Codegen-verified selectors — never invents locators           │
-│  OUTPUT → features/{FeatureName}/pages/, tests/, testData/                 │
+│  Trigger: Run Agent 3 for <FeatureName>                                     │
+│  • Generates thin page objects extending shared/pages/BasePage.ts —         │
+│    locators resolve at runtime (codegenForm → primary → fallback via .or()) │
+│  • Generates test suite + test data JSON; never invents selectors           │
+│  • Tags every test (@smoke / @regression / @functional / @security)         │
+│  • Skips missing locators with // TODO(Agent2-rerun) comments               │
+│  • Self-heal loop: runs the tests, reads results.json, repairs automation   │
+│    failures (up to 3 rounds) before hand-off to Agent 4                     │
+│  OUTPUT → features/{FeatureName}/pages/, tests/, testData/                  │
 └─────────────────────────────────────────────────────────────────────────────┘
       │
-      │  YOU run:  npx playwright test (see Step 4 below)
+      │  Run tests:  npx playwright test features/{FeatureName}/tests/
       ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  Agent 4 — Bug Report Generator                                             │
-│  • Reads Playwright test results (JSON, JUnit, screenshots, traces)        │
-│  • Classifies every failure: Product Bug / Automation Issue /               │
-│    Infra Failure / Flaky                                                    │
-│  • Creates individual bug report files for Product Bugs only               │
-│  • Creates QA_BACKLOG.md for non-product failures                          │
-│  OUTPUT → features/{FeatureName}/bugReports/                               │
+│  Trigger: Run Agent 4 for <FeatureName>                                     │
+│  • Reads reports/test-results/ (JSON + JUnit + screenshots + traces)        │
+│  • Classifies: Product Bug / Automation Issue / Infra Failure / Flaky       │
+│  • Creates individual issues_*.md files for Product Bugs only               │
+│  • Writes QA_RUN_REPORT.md for all other failures                           │
+│  OUTPUT → all_issues/issues_{FeatureName}_*.md                              │
+│           features/{FeatureName}/bugReports/QA_RUN_REPORT.md                │
 └─────────────────────────────────────────────────────────────────────────────┘
       │
       ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│  Agent 5 — Zoho MCP Agent                                                  │
-│  • Reads bug report files (issues_*.md)                                    │
-│  • Deduplicates against local sync log + live Zoho API                     │
-│  • Creates Zoho issues for confirmed Product Bugs                          │
-│  • Writes a sync report and updates zoho/sync_log.json                     │
-│  OUTPUT → Zoho Project Issues + BugReports_Sync_Report_{date}.md           │
+│  Agent 5 — Zoho Sync Agent                                                  │
+│  Trigger: Run Agent 5 for <FeatureName>                                     │
+│  • Reads all_issues/issues_{FeatureName}_*.md                               │
+│  • Deduplicates against sync_log.json + live Zoho API                       │
+│  • Creates Zoho bug issues via REST API (OAuth — no MCP connector)          │
+│  • Attaches the mandatory "AI identified" tag to every created issue        │
+│  • Appends to zoho/sync_log.json (append-only, source of truth)             │
+│  OUTPUT → Zoho Project Issues                                               │
 └─────────────────────────────────────────────────────────────────────────────┘
-      │
-      ▼
-   Zoho Issue (linked to the original task)
 ```
 
 ---
@@ -75,401 +88,204 @@ Zoho Task (ID)
 ### Prerequisites
 
 - Node.js 18+
-- npm
-- Access to the application under test
-- Zoho Projects account (required for Agent 1 and Agent 5)
-- Claude Code with Zoho MCP integration configured
+- A Zoho Projects account with API access
+- Claude Code (desktop app, VS Code extension, or CLI)
 
 ### Installation
 
 ```bash
-# 1. Install dependencies
+npm run setup        # one-shot: npm install + cp .env.example .env + playwright install
+```
+
+Or step by step:
+
+```bash
 npm install
-
-# 2. Install Playwright browsers
-npx playwright install
-
-# 3. Configure environment
+npx playwright install chromium
 cp .env.example .env
 ```
 
-Open `.env` and fill in:
+Fill in `.env`:
 
 | Variable | Description |
-|----------|-------------|
-| `BASE_URL` | URL of the application under test (e.g. `https://staging.yourapp.com`) |
-| `TEST_USER_EMAIL` | QA test account email (must already exist in the app) |
-| `TEST_USER_PASSWORD` | QA test account password |
-| `ZOHO_API_KEY` | Zoho Bearer token (see `.env.example` for how to obtain) |
-| `ZOHO_PORTAL_ID` | Numeric portal ID from Zoho Projects URL |
-| `ZOHO_PROJECT_ID` | Numeric project ID from Zoho Projects URL |
+|---|---|
+| `BASE_URL` | App under test (e.g. `https://staging.yourapp.com`) |
+| `SIGN_IN_URL` | Admin/portal login URL (used for admin-side features) |
+| `TEST_USER_EMAIL` / `TEST_USER_PASSWORD` | Provisioned test login for the app |
+| `TEST_EMAIL_BASE` | Real monitored inbox — `generateTestEmail()` derives unique `+alias` addresses for form fills |
+| `ZOHO_CLIENT_ID` | From https://api-console.zoho.com → Self Client |
+| `ZOHO_CLIENT_SECRET` | Same source |
+| `ZOHO_REFRESH_TOKEN` | Exchange a grant code once; keep it (see `.env.example`) |
+| `ZOHO_PORTAL_ID` | Numeric portal ID from your Zoho Projects URL |
+| `ZOHO_PROJECT_ID` | Numeric project ID from your Zoho Projects URL |
+| `ZOHO_BASE_URL` | Zoho Projects API base (e.g. `https://projectsapi.zoho.com`) |
+
+> See `.env.example` for the full step-by-step guide to generating OAuth credentials.
 
 ---
 
 ## Project Structure
 
 ```
-├── agents/                               # 5-agent pipeline instruction files
-│   ├── 1_Feature_Analyzer_Agent.md       # Zoho task → QA spec
-│   ├── 2_Locator_Agent.md                # Live app → locator map
-│   ├── 3_Playwright_Generator_Agent.md   # Spec + locators → tests
-│   ├── 4_Bug_Report_Generator_Agent.md   # Test results → bug reports
-│   └── 5_Zoho_MCP_Agent.md              # Bug reports → Zoho issues
+├── agents/                               # Agent instruction files
+│   ├── 1_Feature_Analyzer_Agent.md
+│   ├── 2_Locator_Agent.md
+│   ├── 3_Playwright_Generator_Agent.md
+│   ├── 4_Bug_Report_Generator_Agent.md
+│   └── 5_Zoho_Sync_Agent.md
 │
-├── features/                             # One folder per feature
+├── features/                             # One folder per feature (gitignored — generated per-machine)
 │   └── {FeatureName}/
-│       ├── spec/
-│       │   └── QA_{FeatureName}.md       # Agent 1 output — QA specification
+│       ├── feature.config.json           # Feature bootstrap (used by Agents 2–5)
+│       ├── spec/QA_{FeatureName}.md      # Agent 1 output — QA specification
 │       ├── locators/
-│       │   ├── extract_{Feature}_auto.json   # Headless DOM crawl (Step 0)
-│       │   ├── extract_{Feature}_codegen.js  # Codegen fallback (if needed)
-│       │   ├── {FeatureName}_locators.json   # Final merged locator map
-│       │   └── {FeatureName}_locators.md     # Human-readable locator map
-│       ├── pages/
-│       │   └── {PageName}Page.ts         # Page Object Model(s)
-│       ├── tests/
-│       │   └── feature_{name}.spec.ts    # Playwright test suite
-│       ├── testData/
-│       │   └── {feature_name}.json       # Test data (valid, invalid, edge cases)
-│       └── bugReports/
-│           ├── issues_{Feature}_AC_XXX_SCXX.md    # One file per Product Bug
-│           ├── QA_BACKLOG.md                       # Automation/Infra/Flaky issues
-│           ├── BUG_REPORT_SUMMARY.md               # Full run statistics
-│           └── BugReports_Sync_Report_{date}.md    # Zoho sync record
+│       │   ├── {FeatureName}_locators.json   # Final locator map
+│       │   ├── interactions.json             # Declarative dynamic-element triggers
+│       │   └── extract_{Feature}_auto.json   # Auto-extractor audit snapshot
+│       ├── pages/{PageName}Page.ts       # Thin page object (extends BasePage)
+│       ├── tests/feature_{feature_name}.spec.ts  # Test suite (split into _{group}.spec.ts if large)
+│       ├── testData/{feature_name}.json  # Test data
+│       └── bugReports/QA_RUN_REPORT.md  # Agent 4 output
+│
+├── all_issues/                           # Bug report files (one per product bug)
+│   └── issues_{FeatureName}_AC_XXX_SCXX.md
 │
 ├── scripts/
-│   └── auto_locator_extractor.js         # Headless DOM crawler (Agent 2 Step 0)
+│   └── auto_locator_extractor.js         # Single-session locator extractor (Agent 2)
 │
 ├── shared/
-│   └── utils/
-│       └── ConfigLoader.ts               # Type-safe locator + test data loader
+│   ├── pages/BasePage.ts                 # Page-object base — runtime locator resolution
+│   ├── utils/ConfigLoader.ts             # Locator/testData loader + codegenForm→primary→fallback .or() chain
+│   ├── utils/waits.ts                    # Deterministic waits (no waitForTimeout)
+│   ├── utils/timeouts.ts                 # ACTION/NAV/SETTLE timeouts (env-overridable)
+│   ├── utils/testData.ts                 # generateTestEmail() — deliverable +alias emails
+│   ├── assertions/common.ts              # Timeout-wrapped expect helpers
+│   └── auth/                             # Opt-in global login + storageState (disabled by default)
 │
 ├── reports/                              # Playwright output (gitignored)
 │   ├── test-results/                     # Screenshots, videos, traces, JSON, JUnit
 │   └── playwright-report/                # HTML report
 │
 ├── zoho/
-│   ├── config.json.example               # Zoho runtime config template
-│   └── sync_log.json                     # Persistent duplicate-detection log
+│   ├── config.json.example               # Picklist IDs (severity/classification), AI-identified tag, severity map
+│   ├── config.json                       # Your copy (gitignored)
+│   └── sync_log.json                     # Append-only duplicate-detection log
 │
-├── playwright.config.ts                  # Global timeout, browsers, reporters
-├── .env.example                          # Environment variable template
-└── codegen.sh                            # Codegen helper script for Agent 2 fallback
+├── CLAUDE.md                             # Claude Code instructions (auto-loaded)
+├── playwright.config.ts
+└── .env.example
 ```
 
 ---
 
-## Adding a New Feature — Step by Step
+## Agent Trigger Reference
 
-### Step 1 — Agent 1: Feature Analyzer
+| Step | Trigger | Mode |
+|---|---|---|
+| Agent 1 | `Run Agent 1 for <ZohoTaskId> named "<TaskName>"` | Zoho |
+| Agent 1 | `Run Agent 1 for document "<path>" named "<TaskName>"` | Document |
+| Agent 1 | `Run Agent 1 explore mode for <URL> named "<TaskName>"` | Explore |
+| Agent 1 | `Run Agent 1 update mode for <FeatureName> — task: <ZohoTaskId>` | Update |
+| Agent 2 | `Run Agent 2 for <FeatureName>` | Normal |
+| Agent 2 | `Run Agent 2 update mode for <FeatureName>` | Update |
+| Agent 2 | `Run Agent 2 for <full-url>` | URL Mode (no prior setup needed) |
+| Agent 3 | `Run Agent 3 for <FeatureName>` | Normal |
+| Agent 3 | `Run Agent 3 update mode for <FeatureName>` | Update |
+| Agent 4 | `Run Agent 4 for <FeatureName>` | — |
+| Agent 5 | `Run Agent 5 for <FeatureName>` | — |
 
-**Trigger in Claude Code:**
-```
-Run Agent 1 for Zoho task {TASK_ID}, feature {FeatureName}
-```
+**Update mode** applies minimum edits to existing specs, locators, and tests — unchanged scenarios are never touched. Agent 1 writes the AC diff to `features/{FeatureName}/.ac_changes.json`; Agents 2 and 3 read it to know exactly what to re-extract and regenerate.
 
-Agent 1 connects to Zoho via MCP, fetches the full task, and produces a structured spec. It then prints the exact `npm run extract-locators` commands you need to run next.
+**Agent 2 URL mode** can optionally continue the full pipeline after extraction — Agent 3 → run tests → Agent 4 — in a single run.
 
-**Output:** `features/{FeatureName}/spec/QA_{FeatureName}.md`
+### Agent 1 Input Modes
 
-The spec contains:
-- All Acceptance Criteria with scenarios, types, priorities, and automation feasibility
-- A UI Element Inventory (the capture checklist for Agent 2)
-- Risk assessment and test coverage matrix
-
-Agent 1 also runs the auto-extractor automatically against the live app — no manual step needed.
-
-**Auto-extractor output:** `features/{FeatureName}/locators/extract_{FeatureName}_auto.json`
-
----
-
-### Step 2 — Agent 2: Locator Agent
-
-**Trigger in Claude Code:**
-```
-Run Agent 2 for {FeatureName}
-```
-
-Agent 2 reads the auto-extracted JSON as its primary source. It cross-checks every element against the spec's UI Element Inventory. For any elements that the auto-extractor could not reach (error messages, post-submit banners, elements that only appear after an interaction), it runs targeted Playwright Codegen as a fallback.
-
-**Locator source priority:**
-1. Auto-extractor JSON — interactive elements (buttons, links, inputs, dropdowns), captured headlessly
-2. Programmatic DOM evaluation — structural elements (headings, sections, header, footer, nav) that the auto-extractor doesn't capture
-3. Playwright Codegen — dynamic elements only (error banners, post-submit states, modals)
-4. Marked `MISSING` — elements that could not be captured by any source; flagged for follow-up
-
-**Outputs:**
-```
-features/{FeatureName}/locators/extract_{FeatureName}_auto.json    ← headless crawl
-features/{FeatureName}/locators/extract_{FeatureName}_codegen.js   ← Codegen fallback (if needed)
-features/{FeatureName}/locators/{FeatureName}_locators.json        ← final merged map
-features/{FeatureName}/locators/{FeatureName}_locators.md          ← human-readable map
-```
-
-If any P1 (Critical) element is still missing after both sources, Agent 2 will block and warn before handing off to Agent 3.
-
----
-
-### Step 3 — Agent 3: Playwright Test Generator
-
-**Trigger in Claude Code:**
-```
-Run Agent 3 for {FeatureName}
-```
-
-Agent 3 reads the QA spec and the locator map, then generates three files:
-
-**Page Object Models** (`features/{FeatureName}/pages/{PageName}Page.ts`):
-- All locators are `private readonly`
-- Locator selectors come directly from the Codegen-verified locator JSON — never invented
-- Navigation uses relative paths (Playwright prepends `baseURL` automatically)
-- Every public method is `async` with a JSDoc comment
-
-**Test Suite** (`features/{FeatureName}/tests/feature_{feature_name}.spec.ts`):
-- Tests grouped by scenario category using `test.describe()`
-- Every test title includes Scenario ID and AC reference: `'SC-1.1 | AC_001 — description'`
-- Tests are tagged for filtering: `{ tag: ['@smoke', '@regression', '@functional'] }`
-- Arrange / Act / Assert structure
-- No hardcoded waits — Playwright waits only
-
-**Test Data** (`features/{FeatureName}/testData/{feature_name}.json`):
-- Scenarios grouped as `validUsers`, `invalidUsers`, `edgeCaseUsers`
-- No production credentials
-
-**Tag reference:**
-
-| Tag | When applied |
-|-----|-------------|
-| `@smoke` | P1 Happy Path — safe to run on production |
-| `@regression` | P1–P2 scenarios, every build |
-| `@functional` | All automatable ACs |
-| `@security` | Auth, password masking, session handling |
-
----
-
-### Step 4 — Run Tests
-
-```bash
-# Single feature, Chromium (recommended for first run)
-npx playwright test features/{FeatureName}/tests/ --project=chromium
-
-# Single feature, headed (browser visible)
-npx playwright test features/{FeatureName}/tests/ --project=chromium --headed
-
-# Run and open HTML report immediately after
-npm run test:report
-```
-
-> Do not pass `--reporter` on the CLI — it overrides `playwright.config.ts` and skips the JSON/JUnit reporters that Agent 4 depends on.
-
-Results land in:
-- `reports/test-results/` — screenshots, videos, and traces for failed tests; `results.json`; `junit.xml`
-- `reports/playwright-report/` — interactive HTML report (inline screenshots, video playback, trace viewer)
-
-**Viewing the report:**
-```bash
-npm run show-report
-# or: npx playwright show-report reports/playwright-report
-```
-
-The HTML report always opens at `http://localhost:9323` regardless of pass/fail. For failed tests it shows inline screenshots, embedded video playback, and links to open traces directly in the Playwright Trace Viewer.
-
----
-
-### Step 5 — Agent 4: Bug Report Generator
-
-**Trigger in Claude Code:**
-```
-Run Agent 4 for {FeatureName}
-```
-
-Agent 4 reads the test results and classifies every failure:
-
-| Classification | Definition | Destination |
-|----------------|------------|-------------|
-| **Product Bug** | App behaves incorrectly per the spec | Individual `issues_*.md` file → Agent 5 |
-| **Automation Issue** | Test or page object is wrong | `QA_BACKLOG.md` (QA team to fix) |
-| **Infra Failure** | Environment/server caused the failure | `QA_BACKLOG.md` (DevOps to investigate) |
-| **Flaky Failure** | Passed on retry — race condition | `QA_BACKLOG.md` (timing investigation) |
-
-Only Product Bugs become individual bug report files and are sent to Zoho. The others go into `QA_BACKLOG.md` for the QA team.
-
-**Outputs:**
-```
-features/{FeatureName}/bugReports/issues_{FeatureName}_AC_XXX_SCXX.md  ← one per product bug
-features/{FeatureName}/bugReports/QA_BACKLOG.md                         ← non-product failures
-features/{FeatureName}/bugReports/BUG_REPORT_SUMMARY.md                 ← run statistics
-```
-
----
-
-### Step 6 — Agent 5: Zoho MCP Agent
-
-**Trigger in Claude Code:**
-```
-Run Agent 5 for {FeatureName}
-```
-
-Agent 5 reads every `issues_*.md` bug report, checks for duplicates against both the local `zoho/sync_log.json` and the live Zoho API, then creates Zoho issues for confirmed Product Bugs.
-
-**Outputs:**
-```
-features/{FeatureName}/bugReports/BugReports_Sync_Report_{date}.md  ← what was created/skipped
-zoho/sync_log.json                                                   ← updated duplicate-detection log
-```
-
----
-
-## Update Mode (Existing Features)
-
-When a Zoho task describes a **change** to a feature that already has a spec, locators, and tests, run the agents in update mode to apply minimum changes without touching passing tests.
-
-```
-Run Agent 1 update mode for {FeatureName} — task: {TASK_ID}
-Run Agent 2 update mode for {FeatureName}
-Run Agent 3 update mode for {FeatureName}
-```
-
-Update mode:
-- **Agent 1** diffs the new task against the existing spec: new ACs are appended, modified ACs are updated in-place, removed ACs are marked (never deleted), a change log is appended, and a machine-readable `.ac_changes.json` is written
-- **Agent 2** reads `.ac_changes.json` and captures only new or changed locators — existing captured locators are never overwritten
-- **Agent 3** reads `.ac_changes.json` and adds new `test()` blocks, modifies only the affected tests, and wraps removed-AC tests in `test.skip()` — unchanged tests are never touched
+| Mode | AC source | Needs Zoho? | Business context |
+|---|---|---|---|
+| Zoho | PM-authored task fetched via REST API | Yes | Full (task description, attachments) |
+| Document | Parsed from a local file (`.md`, `.txt`, `.pdf`, exported HTML) | No | As rich as the document |
+| Explore | Inferred from live DOM crawl | No | UI-only — hidden states may be missed |
 
 ---
 
 ## Running Tests
 
 ```bash
-# All features, Chromium
-npm test
-
-# With browser visible
-npm test -- --headed
-
-# Specific browser
-npm test -- --project=chromium
-
-# Specific feature
+# Single feature
 npx playwright test features/{FeatureName}/tests/ --project=chromium
 
-# Filter by tag
+# All features
+npm test
+
+# By tag
 npm run test:smoke
 npm run test:regression
 npm run test:functional
 npm run test:security
 
-# Debug mode (opens inspector)
-npm test -- --debug
+# Headed / interactive
+npx playwright test features/{FeatureName}/tests/ --headed
+npm run test:ui      # Playwright UI mode
+npm run test:debug   # Inspector
 
-# UI mode (interactive test runner with watch)
-npm test -- --ui
-
-# Run tests and open HTML report immediately after
-npm run test:report
-
-# View the HTML report from the last run (no re-run)
+# Open HTML report
 npm run show-report
 ```
 
-The HTML report (`reports/playwright-report/`) shows pass/fail status, test durations, and — for failed tests — inline screenshots, embedded video playback, and links to open trace files in the Playwright Trace Viewer.
+> Do not pass `--reporter` on the CLI — it overrides `playwright.config.ts` and breaks the JSON/JUnit output that Agent 4 reads.
 
 ---
 
-## ConfigLoader
+## Locator Sources (Agent 2)
 
-`shared/utils/ConfigLoader.ts` provides type-safe access to locators and test data from any test file.
+All captured in a single browser session per page. Each locator entry records its `source` and `status`:
 
-```typescript
-import { ConfigLoader } from '../../../shared/utils/ConfigLoader';
+| `source` | Used for |
+|---|---|
+| `dom-scan` | Interactive elements (buttons, inputs, links) |
+| `structural` | Headings, sections, nav, landmarks, images |
+| `interaction` | Dynamic elements (modals, toasts, post-submit states) — driven by declarative `interactions.json` |
+| `codegen` | Last resort only, when an element can't be reached declaratively |
 
-// Get a single locator — returns "primary, fallback" selector string
-const selector = ConfigLoader.getLocator('UserLogin', 'signInPage', 'usernameInput');
-
-// Get all locators for a page
-const locators = ConfigLoader.getPageLocators('UserLogin', 'signInPage');
-
-// Get test data
-const testData = ConfigLoader.loadTestData('UserLogin');
-```
-
-Locator files: `features/{FeatureName}/locators/{FeatureName}_locators.json`
-Test data files: `features/{FeatureName}/testData/{featureName}.json`
+Uncapturable elements get `status: missing` — flagged, and tests skip them with `// TODO(Agent2-rerun)`.
 
 ---
 
-## Timeout Configuration
+## Test Tags
 
-All timeouts are set globally in `playwright.config.ts`:
-
-| Setting | Value |
-|---------|-------|
-| Per test | 90 000 ms |
-| Assertions | 90 000 ms |
-| Actions | 90 000 ms |
-| Navigation | 90 000 ms |
+| Tag | Applied when | Safe on prod? |
+|---|---|---|
+| `@smoke` | P1 Happy Path | Yes |
+| `@regression` | P1–P2, run on every build | Staging/CI |
+| `@functional` | All automatable ACs | Staging/CI |
+| `@security` | Auth, masking, session, injection | Staging |
 
 ---
 
-## Browsers
+## Timeouts
 
-Chromium (Chrome) is the active browser. Firefox and WebKit are configured in `playwright.config.ts` but commented out for faster development runs.
+Defined in `shared/utils/timeouts.ts` — `ACTION_TIMEOUT` and `NAV_TIMEOUT` default to 90 000 ms, `SETTLE_TIMEOUT` to 5 000 ms — each overridable via `.env`. `playwright.config.ts` consumes the same values globally.
 
-```bash
-# Chromium (default — active)
-npm test -- --project=chromium
-
-# To enable Firefox or WebKit, uncomment the relevant blocks in playwright.config.ts projects array
-```
+`page.waitForTimeout` is banned in generated tests — use the deterministic helpers in `shared/utils/waits.ts` (`waitForStable`, `waitForEnabled`, `waitForVisibleAny`, `waitForGone`).
 
 ---
 
-## Agent Quick Reference
+## Sharing with a Team
 
-| Agent | Trigger phrase | Input | Output |
-|-------|---------------|-------|--------|
-| 1 — Feature Analyzer | `Run Agent 1 for Zoho task {ID}, feature {Name}` | Zoho task | `spec/QA_{Name}.md` |
-| 2 — Locator Agent | `Run Agent 2 for {Name}` | Spec + auto JSON + live app | `locators/` folder |
-| 3 — Playwright Generator | `Run Agent 3 for {Name}` | Spec + locators | `pages/`, `tests/`, `testData/` |
-| 4 — Bug Report Generator | `Run Agent 4 for {Name}` | Playwright test results | `bugReports/` folder |
-| 5 — Zoho MCP | `Run Agent 5 for {Name}` | Bug report files | Zoho issues + sync report |
+Each collaborator needs their own `.env` with personal Zoho OAuth credentials (the portal/project IDs are shared; the client ID, secret, and refresh token are per-person).
+
+`CLAUDE.md` is committed to the repo and loads automatically in Claude Code for anyone who clones the project — it contains the project overview, agent triggers, and key rules.
+
+`.env` is gitignored and must never be committed.
 
 ---
 
 ## Troubleshooting
 
-| Issue | Solution |
-|-------|----------|
-| `BASE_URL` not set / undefined URL | Check `.env` has `BASE_URL=https://your-app.com`; verify `playwright.config.ts` loads dotenv |
-| Tests timeout on page load | Verify the app is reachable at `BASE_URL`; check `TEST_USER_EMAIL`/`TEST_USER_PASSWORD` in `.env` |
-| Auto-extractor captures 0 elements | Check `BASE_URL` is correct; try `--headed` to inspect what loads |
-| Selector not found in tests | Re-run Agent 1 (or Agent 2, which re-runs the extractor automatically if the auto JSON is missing) — Agent 2 merges and fills gaps |
-| Tests fail on one browser only | Check for browser-specific CSS differences in the locator map |
-| `ConfigLoader` error | Ensure `{FeatureName}_locators.json` exists in `features/{FeatureName}/locators/` |
-| Zoho issue not created | Check `.env` Zoho credentials; run Agent 5 again; check `zoho/sync_log.json` for previous runs |
-| TypeScript compile errors | Run `npx tsc --noEmit` to see all errors; check import paths are relative from `tests/` |
-
----
-
-## Re-running After a Fix
-
-Once a developer resolves a bug:
-
-```bash
-# Re-run the specific feature
-npx playwright test features/{FeatureName}/tests/ --project=chromium
-
-# If passing on one browser, run all
-npx playwright test features/{FeatureName}/tests/
-
-# Re-run Agent 4 to update the bug report summary
-# Then re-run Agent 5 to update the Zoho issue status
-```
-
----
-
-## Security Notes
-
-- `.env` is gitignored — never commit it
-- Never hardcode credentials in test files or page objects — use `testData/*.json` and `.env` only
-- Agent 5 never logs credentials to the sync report or sync log
-- Bug report content is scanned for PII before being sent to Zoho — redacted with `[REDACTED]` if found
+| Issue | Fix |
+|---|---|
+| `BASE_URL` undefined | Check `.env`; confirm `playwright.config.ts` has `import * as dotenv` at the top |
+| Auto-extractor captures 0 elements | Verify `BASE_URL` is correct; try `--headed` to inspect the page |
+| TypeScript errors | `npx tsc --noEmit` to list all; check import paths are relative from `tests/` |
+| Agent 5 creates no issues | Confirm `all_issues/issues_{FeatureName}_*.md` files exist; check `zoho/sync_log.json` for prior runs |
+| Test timeout on first load | Verify app is reachable at `BASE_URL` |
