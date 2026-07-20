@@ -198,6 +198,41 @@ Fill in `.env`:
 
 **Agent 2 URL mode** can optionally continue the full pipeline after extraction — Agent 3 → run tests → Agent 4 — in a single run.
 
+---
+
+## Full Pipeline — One Command (`/e2e-runner`)
+
+Runs Agents 1 → 5 end-to-end, unattended (no stops, no mid-run questions).
+
+```
+/e2e-runner <FeatureName> [zoho <TaskId> | document "<path>" | explore <URL>] [--stop-before-zoho]
+```
+
+| Argument | Meaning |
+|---|---|
+| `<FeatureName>` | Required. First token. |
+| `zoho <TaskId>` | Agent 1 Zoho mode |
+| `document "<path>"` | Agent 1 document mode |
+| `explore <URL>` | Agent 1 explore mode |
+| *(no source)* | If `features/{FeatureName}/` already has a spec → skip Agent 1 and start at Agent 2. No spec + no source → stop and report (the only halt point). |
+| `--stop-before-zoho` | Run Agents 1–4 only; leave issues staged for manual review instead of syncing to Zoho. |
+
+**Execution flow** — each stage gates the next; a failed gate is retried once, then the run stops and reports:
+
+1. **Agent 1** → QA spec under `features/{FeatureName}/`
+2. **Agent 2** → runs `npm run extract-locators`; locator JSON under `locators/`
+3. **Agent 3** → generates + runs tests (`npx playwright test features/{FeatureName}/tests/ --project=chromium`); self-heals locator/timeout failures (max 2 cycles); genuine assertion failures are left for Agent 4
+4. **Agent 4** → `all_issues/issues_{FeatureName}_*.md` for product bugs
+5. **Agent 5** → syncs to Zoho (skipped with `--stop-before-zoho`); duplicate detection + PII redaction always enforced
+
+**Unattended-mode notes:** unconfirmed features are emitted as `test.skip` with a `// NEEDS-CONFIRMATION:` comment (never asked mid-run) and listed in the final summary. For a fully headless run:
+
+```bash
+claude -p "/e2e-runner <FeatureName>"
+```
+
+See `.claude/commands/e2e-runner.md` for the full command definition.
+
 ### Agent 1 Input Modes
 
 | Mode | AC source | Needs Zoho? | Business context |
