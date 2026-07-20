@@ -38,7 +38,8 @@ zoho/config.json
 zoho/task_sync_log.json
 
 # Claude Code local settings (contains machine-specific paths)
-.claude/
+.claude/*
+!.claude/commands/
 
 # IDE
 .vscode/

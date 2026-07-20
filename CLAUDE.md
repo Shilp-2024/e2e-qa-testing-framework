@@ -24,6 +24,17 @@ Run Agent 5 for <FeatureName>
 ```
 Each agent reads `agents/{n}_*.md` for its full instructions.
 
+## Full pipeline (unattended)
+```
+/e2e-runner <FeatureName> [zoho <TaskId> | document "<path>" | explore <URL>] [--stop-before-zoho]
+```
+Runs Agents 1→5 end-to-end with no stops (see `.claude/commands/e2e-runner.md`).
+
+**Unattended-mode policy** (applies only during `/e2e-runner`):
+- Never ask the user questions mid-pipeline. The "ask the user" rule for unconfirmed features becomes: generate the test as `test.skip` with a `// NEEDS-CONFIRMATION: <what to verify>` comment, and list all such items in the final summary.
+- Agent 5 runs automatically; duplicate detection and PII redaction remain mandatory. Use `--stop-before-zoho` to hold issues for manual review instead.
+- Permission allowlist for prompt-free runs lives in `.claude/settings.json` (shared). For fully headless runs: `claude -p "/e2e-runner <FeatureName>"`.
+
 ## Setup
 1. `cp .env.example .env` — fill in `BASE_URL`, Zoho credentials, test user
 2. `npm install`
