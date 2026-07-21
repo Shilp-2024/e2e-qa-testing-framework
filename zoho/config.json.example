@@ -1,6 +1,5 @@
 {
   "portalId": "36485097",
-  "projectId": "your_project_id_here",
   "defaultSeverity": "Minor",
   "defaultStatus": "Open",
   "defaultClassification": "Other bug",
@@ -10,15 +9,16 @@
   "severityIds": {
     "Critical": "688906000000007003",
     "Major": "688906000000007005",
-    "Minor": "688906000000007007"
+    "Minor": "688906000000007007",
+    "ShowStopper": "688906000000007001"
   },
   "classificationIds": {
-    "Other bug": "688906000000021039"
+    "Other bug": "688906000000021039",
+    "Functional": "688906000002822001",
+    "Security": "688906000000021029",
+    "Performance": "688906000000021035",
+    "UI/Usability": "688906000000021037"
   },
-  "severityMap": {
-    "Critical": "Critical",
-    "High": "Major",
-    "Medium": "Minor",
-    "Low": "Minor"
-  }
+  "severityMap": { "Critical": "Critical", "High": "Major", "Medium": "Minor", "Low": "Minor" },
+  "_note": "severityIds/classificationIds/aiIdentifiedTagId are portal-specific picklist IDs (portal 36485097). Re-fetch from bugs/defaultfields/ and the project tag list if the portal changes. severityMap converts bug-report Severity -> Zoho severity name."
 }
