@@ -262,7 +262,7 @@ npm run mobile:test:smoke           # --mochaOpts.grep @smoke
 ### Installation
 
 ```bash
-npm run setup        # one-shot: npm install + cp .env.example .env + playwright install
+npm run setup        # one-shot: npm install + cp .env.example .env + cp zoho/config.json.example zoho/config.json + playwright install
 ```
 
 Or step by step:
@@ -271,6 +271,7 @@ Or step by step:
 npm install
 npx playwright install chromium
 cp .env.example .env
+cp zoho/config.json.example zoho/config.json   # optional — needed for Agent 5 Zoho sync
 ```
 
 Fill in `.env`:
@@ -289,6 +290,8 @@ Fill in `.env`:
 | `ZOHO_BASE_URL` | Zoho Projects API base (e.g. `https://projectsapi.zoho.com`) |
 
 > See `.env.example` for the full step-by-step guide to generating OAuth credentials.
+
+`zoho/config.json` (gitignored) holds Zoho picklist IDs — severity/classification, the AI-identified tag, and the severity map. Copy it from `zoho/config.json.example`. It's optional: Agent 5 falls back to `.env` for portal/project IDs if the file is missing, but the picklist and tag mappings won't be applied.
 
 ---
 
