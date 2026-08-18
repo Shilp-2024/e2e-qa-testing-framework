@@ -83,6 +83,173 @@ Zoho Task (ID)  |  Local Document  |  Live URL
 
 ---
 
+## Mobile Pipeline Overview (Appium)
+
+A **fully separate 4-agent track** for native mobile app testing (Android `.apk` / iOS `.ipa`) sits
+alongside the web pipeline above — own agent docs (`agents/mobile/`), own shared toolkit
+(`shared/mobile/`), own WebdriverIO/Appium test runner (`wdio.conf.ts`), own reports directory
+(`reports/mobile/`). It shares no Playwright code, but mirrors the same locator-JSON field names,
+bug-report format, and hand-off style. **Agent 5 (Zoho Sync) is reused unchanged** — bug reports
+from either pipeline land in the same `all_issues/` folder in the same markdown shape.
+
+```
+Zoho Task (ID)  |  Local Document  |  App (.apk / .ipa)
+                      │
+      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  Agent 1 (Mobile) — Feature Analyzer                                        │
+│  Trigger (Zoho):     Run Agent 1 mobile for <ZohoTaskId> named "<Name>"     │
+│  Trigger (Document): Run Agent 1 mobile for document "<path>" named "<Name>"│
+│  Trigger (Explore):  Run Agent 1 mobile explore mode for <apk/ipa> named…   │
+│  OUTPUT → features/mobile/{FeatureName}/spec/QA_{FeatureName}.md            │
+│           features/mobile/{FeatureName}/feature.config.json                 │
+└─────────────────────────────────────────────────────────────────────────────┘
+      │
+      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  Agent 2 (Mobile) — Locator Agent                                           │
+│  Trigger: Run Agent 2 mobile for <FeatureName>                              │
+│  • Runs npm run mobile:extract-locators — ONE Appium session per screen     │
+│    captures interactive + structural elements, dynamic elements (via        │
+│    declarative interactions.json), same-session matchCount validation       │
+│  • Appium Inspector is last-resort only (element unreachable declaratively) │
+│  OUTPUT → features/mobile/{FeatureName}/locators/{FeatureName}_locators.json│
+└─────────────────────────────────────────────────────────────────────────────┘
+      │
+      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  Agent 3 (Mobile) — Appium Test Generator                                   │
+│  Trigger: Run Agent 3 mobile for <FeatureName>                              │
+│  • Generates thin screen objects extending shared/mobile/screens/BaseScreen │
+│  • Generates Mocha test suite + test data; tags embedded in it() titles     │
+│  • Self-heal loop: runs the tests, reads results.json, repairs failures     │
+│  OUTPUT → features/mobile/{FeatureName}/screens/, tests/, testData/         │
+└─────────────────────────────────────────────────────────────────────────────┘
+      │
+      │  Run tests:  npx wdio run wdio.conf.ts --spec features/mobile/{FeatureName}/tests/
+      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  Agent 4 (Mobile) — Bug Report Generator                                    │
+│  Trigger: Run Agent 4 mobile for <FeatureName>                              │
+│  • Reads reports/mobile/test-results/ (merged JSON + JUnit + screenshots)   │
+│  • Classifies: Product Bug / Automation Issue / Infra Failure / Flaky       │
+│  OUTPUT → all_issues/issues_{FeatureName}_*.md (same folder as web)         │
+│           features/mobile/{FeatureName}/bugReports/QA_RUN_REPORT.md         │
+└─────────────────────────────────────────────────────────────────────────────┘
+      │
+      ▼
+     Agent 5 — Zoho Sync Agent (existing, unmodified — see pipeline above)
+```
+
+### Mobile Setup — Prerequisites & Environment
+
+Everything below is in addition to the web prerequisites (Node.js, Zoho access). Android and iOS
+setup are independent — skip whichever platform you're not testing.
+
+**1. Java (required by the Android SDK toolchain)** — any JDK 17+:
+```bash
+brew install openjdk        # macOS; confirm with `java -version`
+```
+
+**2. Android SDK** — easiest path is Android Studio (bundles the SDK, platform-tools, emulator,
+and a GUI AVD manager): https://developer.android.com/studio. Command-line-only setups need the
+SDK's `cmdline-tools`, then `sdkmanager` to fetch `platform-tools`, `emulator`,
+`platforms;android-XX`, `system-images;android-XX;google_apis;arm64-v8a`, `build-tools;XX.0.0`.
+
+**3. Export Android environment variables** — add to `~/.zshrc` (or `~/.bash_profile`), then open a
+new terminal (or `source` the file):
+```bash
+export ANDROID_HOME=$HOME/Library/Android/sdk
+export ANDROID_SDK_ROOT=$ANDROID_HOME
+export PATH=$PATH:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$ANDROID_HOME/cmdline-tools/latest/bin
+```
+Confirm with `adb devices` (should run with no error, even with zero devices attached) and
+`emulator -list-avds`.
+
+**4. Create an emulator (AVD)** — via Android Studio: Tools → Device Manager → Create Device → pick
+a Pixel profile → pick a system image (use a **Google APIs**/Play image if the app under test
+depends on Play Services) → Finish. Command-line equivalent:
+```bash
+avdmanager create avd -n <AvdName> -k "system-images;android-XX;google_apis;arm64-v8a" -d pixel
+```
+
+**5. Start the emulator before running any mobile agent or test** — it must already be running and
+attached; nothing in this pipeline boots one for you:
+```bash
+emulator -avd <AvdName> &
+adb wait-for-device
+adb devices          # must show "emulator-XXXX  device" before proceeding
+```
+
+**6. iOS only** — install Xcode + command-line tools (`xcode-select --install`), then boot a
+simulator before running tests:
+```bash
+open -a Simulator
+```
+
+**7. Install Appium drivers and sanity-check the toolchain:**
+```bash
+npm install                                       # installs webdriverio/appium/wdio deps too
+npx appium driver install uiautomator2            # Android — or rely on the project-local npm dep
+npx appium driver install xcuitest                # iOS — or rely on the project-local npm dep
+npm run mobile:appium-doctor                       # sanity-check the toolchain
+```
+
+**8. Fill in the mobile `.env` vars** — see `.env.example` for the full reference:
+
+| Variable | Description |
+|---|---|
+| `APPIUM_SERVER_URL` | Informational — `wdio.conf.ts` starts/stops its own local Appium service automatically |
+| `ANDROID_APK_PATH` | Path to a fresh `.apk` to install — takes priority over the package/activity pair below |
+| `ANDROID_APP_PACKAGE` / `ANDROID_APP_ACTIVITY` | Used instead of `ANDROID_APK_PATH` when the app is already installed on the device |
+| `ANDROID_DEVICE_NAME` / `ANDROID_PLATFORM_VERSION` | Must match the AVD created in step 4 |
+| `IOS_APP_PATH` | `.app` bundle — **simulators only** |
+| `IOS_IPA_PATH` | Signed `.ipa` — **real devices only**, not interchangeable with `IOS_APP_PATH` |
+| `IOS_BUNDLE_ID` | Used instead of either path when the app is already installed |
+| `IOS_DEVICE_NAME` / `IOS_PLATFORM_VERSION` / `IOS_UDID` | `IOS_UDID` required for real devices, optional for simulators |
+| `MOBILE_TEST_USER_EMAIL` / `MOBILE_TEST_USER_PASSWORD` | Test account credentials used by generated login flows |
+
+**9. Verify the full chain works end-to-end:**
+```bash
+adb devices                          # device/emulator attached
+npm run mobile:appium-doctor         # Appium + drivers healthy
+npx wdio run ./wdio.conf.ts --spec ./features/mobile/<Feature>/tests/feature_<feature>.spec.ts --mochaOpts.grep @smoke
+```
+
+**Mobile Agent Trigger Reference:**
+
+| Step | Trigger | Mode |
+|---|---|---|
+| Agent 1 (Mobile) | `Run Agent 1 mobile for <ZohoTaskId> named "<Name>"` | Zoho |
+| Agent 1 (Mobile) | `Run Agent 1 mobile for document "<path>" named "<Name>"` | Document |
+| Agent 1 (Mobile) | `Run Agent 1 mobile explore mode for <apk_or_ipa_path> named "<Name>"` | Explore |
+| Agent 1 (Mobile) | `Run Agent 1 mobile update mode for <FeatureName> — task: <ZohoTaskId>` | Update |
+| Agent 2 (Mobile) | `Run Agent 2 mobile for <FeatureName>` | Normal |
+| Agent 2 (Mobile) | `Run Agent 2 mobile update mode for <FeatureName>` | Update |
+| Agent 2 (Mobile) | `Run Agent 2 mobile for <apk_or_ipa_path>` | App Mode (no prior setup needed) |
+| Agent 3 (Mobile) | `Run Agent 3 mobile for <FeatureName>` | Normal |
+| Agent 3 (Mobile) | `Run Agent 3 mobile update mode for <FeatureName>` | Update |
+| Agent 4 (Mobile) | `Run Agent 4 mobile for <FeatureName>` | — |
+| Agent 5 | `Run Agent 5 for <FeatureName>` | — (existing, unmodified) |
+
+**Full mobile pipeline — one command:**
+```
+/mobile-e2e-runner <FeatureName> [zoho <TaskId> | document "<path>" | explore <apk_or_ipa_path>] --platform <android|ios|both> [--stop-before-zoho]
+```
+Same unattended-mode policy and gate-per-stage structure as `/e2e-runner` — see
+`.claude/commands/mobile-e2e-runner.md`.
+
+Running tests directly:
+```bash
+npx wdio run wdio.conf.ts --spec features/mobile/{FeatureName}/tests/feature_{feature_name}.spec.ts
+npm run mobile:test                 # all mobile features
+npm run mobile:test:smoke           # --mochaOpts.grep @smoke
+```
+> Do not pass `--reporter`/override reporter options on the CLI — `wdio.conf.ts`'s `onComplete` merge
+> step is what produces the single `results.json` Agent 4 (Mobile) reads.
+
+---
+
 ## Quick Start
 
 ### Prerequisites
@@ -90,6 +257,7 @@ Zoho Task (ID)  |  Local Document  |  Live URL
 - Node.js 18+
 - A Zoho Projects account with API access
 - Claude Code (desktop app, VS Code extension, or CLI)
+- *(Mobile pipeline only)* Appium 2.x, an Android emulator or iOS simulator, Xcode (iOS) / Android SDK (Android) — see "Mobile Setup — Prerequisites & Environment" above
 
 ### Installation
 
@@ -135,47 +303,70 @@ Fill in `.env`:
 │   ├── 2_Locator_Agent.md
 │   ├── 3_Playwright_Generator_Agent.md
 │   ├── 4_Bug_Report_Generator_Agent.md
-│   └── 5_Zoho_Sync_Agent.md
+│   ├── 5_Zoho_Sync_Agent.md              # Reused unchanged by the mobile pipeline too
+│   └── mobile/                           # Mobile (Appium) pipeline — Agents 1-4 only
+│       ├── 1_Mobile_Feature_Analyzer_Agent.md
+│       ├── 2_Mobile_Locator_Agent.md
+│       ├── 3_Appium_Generator_Agent.md
+│       └── 4_Mobile_Bug_Report_Generator_Agent.md
 │
 ├── features/                             # One folder per feature (gitignored — generated per-machine)
-│   └── {FeatureName}/
-│       ├── feature.config.json           # Feature bootstrap (used by Agents 2–5)
-│       ├── spec/QA_{FeatureName}.md      # Agent 1 output — QA specification
-│       ├── locators/
-│       │   ├── {FeatureName}_locators.json   # Final locator map
-│       │   ├── interactions.json             # Declarative dynamic-element triggers
-│       │   └── extract_{Feature}_auto.json   # Auto-extractor audit snapshot
-│       ├── pages/{PageName}Page.ts       # Thin page object (extends BasePage)
-│       ├── tests/feature_{feature_name}.spec.ts  # Test suite (split into _{group}.spec.ts if large)
-│       ├── testData/{feature_name}.json  # Test data
-│       └── bugReports/QA_RUN_REPORT.md  # Agent 4 output
+│   ├── {FeatureName}/                    # Web features
+│   │   ├── feature.config.json           # Feature bootstrap (used by Agents 2–5)
+│   │   ├── spec/QA_{FeatureName}.md      # Agent 1 output — QA specification
+│   │   ├── locators/
+│   │   │   ├── {FeatureName}_locators.json   # Final locator map
+│   │   │   ├── interactions.json             # Declarative dynamic-element triggers
+│   │   │   └── extract_{Feature}_auto.json   # Auto-extractor audit snapshot
+│   │   ├── pages/{PageName}Page.ts       # Thin page object (extends BasePage)
+│   │   ├── tests/feature_{feature_name}.spec.ts  # Test suite (split into _{group}.spec.ts if large)
+│   │   ├── testData/{feature_name}.json  # Test data
+│   │   └── bugReports/QA_RUN_REPORT.md  # Agent 4 output
+│   └── mobile/{FeatureName}/             # Mobile features — same shape, screens/ instead of pages/
+│       ├── feature.config.json           # + platform, appPackage/appActivity, bundleId, apkPath/ipaPath
+│       ├── spec/QA_{FeatureName}.md
+│       ├── locators/{FeatureName}_locators.json, interactions.json, extract_{Feature}_mobile_auto.json
+│       ├── screens/{ScreenName}Screen.ts # Thin screen object (extends BaseScreen)
+│       ├── tests/feature_{feature_name}.spec.ts
+│       ├── testData/{feature_name}.json
+│       └── bugReports/QA_RUN_REPORT.md
 │
-├── all_issues/                           # Bug report files (one per product bug)
+├── all_issues/                           # Bug report files (one per product bug — web AND mobile)
 │   └── issues_{FeatureName}_AC_XXX_SCXX.md
 │
 ├── scripts/
-│   └── auto_locator_extractor.js         # Single-session locator extractor (Agent 2)
+│   ├── auto_locator_extractor.js         # Single-session locator extractor (Agent 2)
+│   └── mobile/auto_element_extractor.js  # Single-session Appium element extractor (Agent 2 Mobile)
 │
 ├── shared/
 │   ├── pages/BasePage.ts                 # Page-object base — runtime locator resolution
 │   ├── utils/ConfigLoader.ts             # Locator/testData loader + codegenForm→primary→fallback .or() chain
 │   ├── utils/waits.ts                    # Deterministic waits (no waitForTimeout)
 │   ├── utils/timeouts.ts                 # ACTION/NAV/SETTLE timeouts (env-overridable)
-│   ├── utils/testData.ts                 # generateTestEmail() — deliverable +alias emails
+│   ├── utils/testData.ts                 # generateTestEmail() — deliverable +alias emails (reused by mobile)
 │   ├── assertions/common.ts              # Timeout-wrapped expect helpers
-│   └── auth/                             # Opt-in global login + storageState (disabled by default)
+│   ├── auth/                             # Opt-in global login + storageState (disabled by default)
+│   └── mobile/                           # Mobile toolkit — zero Playwright dependency
+│       ├── screens/BaseScreen.ts         # Screen-object base — runtime element resolution
+│       ├── utils/MobileConfigLoader.ts   # codegenForm→primary→platform-fallback→shared-fallback resolver
+│       ├── utils/waits.ts, timeouts.ts
+│       └── assertions/common.ts
 │
-├── reports/                              # Playwright output (gitignored)
-│   ├── test-results/                     # Screenshots, videos, traces, JSON, JUnit
-│   └── playwright-report/                # HTML report
+├── reports/                              # Test runner output (gitignored)
+│   ├── test-results/                     # Playwright: screenshots, videos, traces, JSON, JUnit
+│   ├── playwright-report/                # Playwright HTML report
+│   └── mobile/                           # WebdriverIO/Appium
+│       ├── test-results/                 # Merged results.json, junit.xml
+│       └── screenshots/                  # Failure screenshots
 │
 ├── zoho/
 │   ├── config.json.example               # Picklist IDs (severity/classification), AI-identified tag, severity map
 │   ├── config.json                       # Your copy (gitignored)
-│   └── sync_log.json                     # Append-only duplicate-detection log
+│   └── sync_log.json                     # Append-only duplicate-detection log (shared by both pipelines)
 │
 ├── CLAUDE.md                             # Claude Code instructions (auto-loaded)
 ├── playwright.config.ts
+├── wdio.conf.ts                           # Mobile (Appium) test runner config
 └── .env.example
 ```
 
@@ -327,3 +518,8 @@ Each collaborator needs their own `.env` with personal Zoho OAuth credentials (t
 | TypeScript errors | `npx tsc --noEmit` to list all; check import paths are relative from `tests/` |
 | Agent 5 creates no issues | Confirm `all_issues/issues_{FeatureName}_*.md` files exist; check `zoho/sync_log.json` for prior runs |
 | Test timeout on first load | Verify app is reachable at `BASE_URL` |
+| *(Mobile)* Appium session not created | Run `npm run mobile:appium-doctor`; confirm an emulator/simulator/device is running and `APPIUM_SERVER_URL` is correct |
+| *(Mobile)* `Neither ANDROID_HOME nor ANDROID_SDK_ROOT ... exported` | New terminal/session didn't pick up shell profile changes — re-`source ~/.zshrc` or open a fresh terminal; confirm with `echo $ANDROID_HOME` |
+| *(Mobile)* `adb devices` shows nothing / emulator disconnects mid-run | Emulator process died (check `ps aux \| grep qemu-system`) — usually from extended heavy churn (many rapid app terminate/relaunch cycles); restart it with `emulator -avd <AvdName> &` and `adb wait-for-device` |
+| *(Mobile)* Element extractor captures 0 elements | Confirm `navigateSteps` actually reach the target screen — check with Appium Inspector |
+| *(Mobile)* `results.json` missing/stale | Confirm `wdio.conf.ts`'s `onComplete` merge step ran — `@wdio/json-reporter` writes one file per session by default |
