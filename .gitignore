@@ -25,10 +25,6 @@ yarn.lock
 /reports/playwright-report/
 /reports/blob-report/
 
-# Mobile (Appium/WebdriverIO) test artifacts
-/reports/mobile/test-results/
-/reports/mobile/screenshots/
-
 # Generated run reports (per-feature) — issues now live in all_issues/ (see below)
 features/**/bugReports/QA_RUN_REPORT.md
 
@@ -40,19 +36,6 @@ features/
 zoho/sync_log.json
 zoho/config.json
 zoho/task_sync_log.json
-
-# Zoho auth session — never commit
-auth.json
-
-# App builds under test (.apk/.ipa) — app-specific binaries, not generic framework code
-/builds/
-
-# App-specific shared mobile screens — encode this particular app's actual screen content
-# (button labels, tab names, FAB coordinates), reused across this app's own features but not
-# generic/reusable framework code like BaseScreen.ts, which stays tracked.
-shared/mobile/screens/AuthLandingScreen.ts
-shared/mobile/screens/TodayDashboardScreen.ts
-shared/mobile/screens/LogoutFlowScreen.ts
 
 # Claude Code local settings (contains machine-specific paths)
 .claude/*
