@@ -1,0 +1,8 @@
+{
+  "projectKey": "WAP",
+  "issueTypeName": "Bug",
+  "aiIdentifiedLabel": "ai-identified",
+  "defaultPriority": "Medium",
+  "priorityMap": { "Critical": "Highest", "High": "High", "Medium": "Medium", "Low": "Low" },
+  "_note": "Jira Cloud identifies issuetype/priority by name, not numeric picklist IDs like Zoho did — verify these names exist in your project's scheme via GET {JIRA_BASE_URL}/rest/api/3/project/{projectKey}. priorityMap converts bug-report Severity -> Jira priority name."
+}

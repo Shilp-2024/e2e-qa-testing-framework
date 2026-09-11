@@ -1,6 +1,6 @@
 # E2E QA Testing Framework
 
-A Playwright-based end-to-end testing framework powered by a **5-agent AI pipeline** that converts a Zoho task directly into running tests — and feeds failures back into Zoho as structured bug reports.
+A Playwright-based end-to-end testing framework powered by a **5-agent AI pipeline** that converts a Jira issue directly into running tests — and feeds failures back into Jira as structured bug reports.
 
 Each agent is a Claude Code instruction file in `agents/`. Run them by typing a trigger phrase in Claude Code.
 
@@ -9,15 +9,15 @@ Each agent is a Claude Code instruction file in `agents/`. Run them by typing a 
 ## Pipeline Overview
 
 ```
-Zoho Task (ID)  |  Local Document  |  Live URL
+Jira Issue (Key)  |  Local Document  |  Live URL
                       │
       ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │  Agent 1 — Feature Analyzer                                                 │
-│  Trigger (Zoho):     Run Agent 1 for <ZohoTaskId> named "<TaskName>"        │
+│  Trigger (Jira):     Run Agent 1 for <JiraIssueKey> named "<TaskName>"      │
 │  Trigger (Document): Run Agent 1 for document "<path>" named "<TaskName>"   │
 │  Trigger (Explore):  Run Agent 1 explore mode for <URL> named "<TaskName>"  │
-│  • Zoho mode   — fetches task via REST API                                  │
+│  • Jira mode   — fetches issue via REST API                                 │
 │  • Document mode — parses a local spec file (md, txt, pdf, html)            │
 │  • Explore mode  — crawls the live URL and infers ACs from the DOM          │
 │  • Extracts all ACs, scenarios, and UI Element Inventory                    │
@@ -70,14 +70,14 @@ Zoho Task (ID)  |  Local Document  |  Live URL
       │
       ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│  Agent 5 — Zoho Sync Agent                                                  │
+│  Agent 5 — Jira Sync Agent                                                  │
 │  Trigger: Run Agent 5 for <FeatureName>                                     │
 │  • Reads all_issues/issues_{FeatureName}_*.md                               │
-│  • Deduplicates against sync_log.json + live Zoho API                       │
-│  • Creates Zoho bug issues via REST API (OAuth — no MCP connector)          │
-│  • Attaches the mandatory "AI identified" tag to every created issue        │
-│  • Appends to zoho/sync_log.json (append-only, source of truth)             │
-│  OUTPUT → Zoho Project Issues                                               │
+│  • Deduplicates against sync_log.json + live Jira JQL search                │
+│  • Creates Jira bug issues via REST API (API token — no MCP connector)      │
+│  • Attaches the mandatory "ai-identified" label to every created issue      │
+│  • Appends to jira/sync_log.json (append-only, source of truth)             │
+│  OUTPUT → Jira Project Issues                                               │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -88,13 +88,13 @@ Zoho Task (ID)  |  Local Document  |  Live URL
 ### Prerequisites
 
 - Node.js 18+
-- A Zoho Projects account with API access
+- A Jira Cloud account with API access
 - Claude Code (desktop app, VS Code extension, or CLI)
 
 ### Installation
 
 ```bash
-npm run setup        # one-shot: npm install + cp .env.example .env + cp zoho/config.json.example zoho/config.json + playwright install
+npm run setup        # one-shot: npm install + cp .env.example .env + cp jira/config.json.example jira/config.json + playwright install
 ```
 
 Or step by step:
@@ -103,7 +103,7 @@ Or step by step:
 npm install
 npx playwright install chromium
 cp .env.example .env
-cp zoho/config.json.example zoho/config.json   # optional — needed for Agent 5 Zoho sync
+cp jira/config.json.example jira/config.json   # optional — needed for Agent 5 Jira sync
 ```
 
 Fill in `.env`:
@@ -114,16 +114,14 @@ Fill in `.env`:
 | `SIGN_IN_URL` | Admin/portal login URL (used for admin-side features) |
 | `TEST_USER_EMAIL` / `TEST_USER_PASSWORD` | Provisioned test login for the app |
 | `TEST_EMAIL_BASE` | Real monitored inbox — `generateTestEmail()` derives unique `+alias` addresses for form fills |
-| `ZOHO_CLIENT_ID` | From https://api-console.zoho.com → Self Client |
-| `ZOHO_CLIENT_SECRET` | Same source |
-| `ZOHO_REFRESH_TOKEN` | Exchange a grant code once; keep it (see `.env.example`) |
-| `ZOHO_PORTAL_ID` | Numeric portal ID from your Zoho Projects URL |
-| `ZOHO_PROJECT_ID` | Numeric project ID from your Zoho Projects URL |
-| `ZOHO_BASE_URL` | Zoho Projects API base (e.g. `https://projectsapi.zoho.com`) |
+| `JIRA_EMAIL` | Your Atlassian account email |
+| `JIRA_API_TOKEN` | From https://id.atlassian.com/manage-profile/security/api-tokens |
+| `JIRA_BASE_URL` | Your Jira Cloud site root (e.g. `https://yourcompany.atlassian.net`) |
+| `JIRA_PROJECT_KEY` | The project key issues live under (e.g. `WAP`) |
 
-> See `.env.example` for the full step-by-step guide to generating OAuth credentials.
+> See `.env.example` for the full step-by-step guide to generating an API token.
 
-`zoho/config.json` (gitignored) holds Zoho picklist IDs — severity/classification, the AI-identified tag, and the severity map. Copy it from `zoho/config.json.example`. It's optional: Agent 5 falls back to `.env` for portal/project IDs if the file is missing, but the picklist and tag mappings won't be applied.
+`jira/config.json` (gitignored) holds the Jira `issuetype`/`priority` names to use on create, the "AI identified" label, and the severity→priority map. Copy it from `jira/config.json.example`. It's optional: Agent 5 falls back to `.env` for the project key if the file is missing, but the type/priority/label mappings won't be applied.
 
 ---
 
@@ -135,7 +133,7 @@ Fill in `.env`:
 │   ├── 2_Locator_Agent.md
 │   ├── 3_Playwright_Generator_Agent.md
 │   ├── 4_Bug_Report_Generator_Agent.md
-│   └── 5_Zoho_Sync_Agent.md
+│   └── 5_Jira_Sync_Agent.md
 │
 ├── features/                             # One folder per feature (gitignored — generated per-machine)
 │   └── {FeatureName}/
@@ -169,8 +167,8 @@ Fill in `.env`:
 │   ├── test-results/                     # Screenshots, videos, traces, JSON, JUnit
 │   └── playwright-report/                # HTML report
 │
-├── zoho/
-│   ├── config.json.example               # Picklist IDs (severity/classification), AI-identified tag, severity map
+├── jira/
+│   ├── config.json.example               # issuetype/priority names, AI-identified label, severity→priority map
 │   ├── config.json                       # Your copy (gitignored)
 │   └── sync_log.json                     # Append-only duplicate-detection log
 │
@@ -185,10 +183,10 @@ Fill in `.env`:
 
 | Step | Trigger | Mode |
 |---|---|---|
-| Agent 1 | `Run Agent 1 for <ZohoTaskId> named "<TaskName>"` | Zoho |
+| Agent 1 | `Run Agent 1 for <JiraIssueKey> named "<TaskName>"` | Jira |
 | Agent 1 | `Run Agent 1 for document "<path>" named "<TaskName>"` | Document |
 | Agent 1 | `Run Agent 1 explore mode for <URL> named "<TaskName>"` | Explore |
-| Agent 1 | `Run Agent 1 update mode for <FeatureName> — task: <ZohoTaskId>` | Update |
+| Agent 1 | `Run Agent 1 update mode for <FeatureName> — task: <JiraIssueKey>` | Update |
 | Agent 2 | `Run Agent 2 for <FeatureName>` | Normal |
 | Agent 2 | `Run Agent 2 update mode for <FeatureName>` | Update |
 | Agent 2 | `Run Agent 2 for <full-url>` | URL Mode (no prior setup needed) |
@@ -208,17 +206,17 @@ Fill in `.env`:
 Runs Agents 1 → 5 end-to-end, unattended (no stops, no mid-run questions).
 
 ```
-/e2e-runner <FeatureName> [zoho <TaskId> | document "<path>" | explore <URL>] [--stop-before-zoho]
+/e2e-runner <FeatureName> [jira <IssueKey> | document "<path>" | explore <URL>] [--stop-before-jira]
 ```
 
 | Argument | Meaning |
 |---|---|
 | `<FeatureName>` | Required. First token. |
-| `zoho <TaskId>` | Agent 1 Zoho mode |
+| `jira <IssueKey>` | Agent 1 Jira mode |
 | `document "<path>"` | Agent 1 document mode |
 | `explore <URL>` | Agent 1 explore mode |
 | *(no source)* | If `features/{FeatureName}/` already has a spec → skip Agent 1 and start at Agent 2. No spec + no source → stop and report (the only halt point). |
-| `--stop-before-zoho` | Run Agents 1–4 only; leave issues staged for manual review instead of syncing to Zoho. |
+| `--stop-before-jira` | Run Agents 1–4 only; leave issues staged for manual review instead of syncing to Jira. |
 
 **Execution flow** — each stage gates the next; a failed gate is retried once, then the run stops and reports:
 
@@ -226,7 +224,7 @@ Runs Agents 1 → 5 end-to-end, unattended (no stops, no mid-run questions).
 2. **Agent 2** → runs `npm run extract-locators`; locator JSON under `locators/`
 3. **Agent 3** → generates + runs tests (`npx playwright test features/{FeatureName}/tests/ --project=chromium`); self-heals locator/timeout failures (max 2 cycles); genuine assertion failures are left for Agent 4
 4. **Agent 4** → `all_issues/issues_{FeatureName}_*.md` for product bugs
-5. **Agent 5** → syncs to Zoho (skipped with `--stop-before-zoho`); duplicate detection + PII redaction always enforced
+5. **Agent 5** → syncs to Jira (skipped with `--stop-before-jira`); duplicate detection + PII redaction always enforced
 
 **Unattended-mode notes:** unconfirmed features are emitted as `test.skip` with a `// NEEDS-CONFIRMATION:` comment (never asked mid-run) and listed in the final summary. For a fully headless run:
 
@@ -238,9 +236,9 @@ See `.claude/commands/e2e-runner.md` for the full command definition.
 
 ### Agent 1 Input Modes
 
-| Mode | AC source | Needs Zoho? | Business context |
+| Mode | AC source | Needs Jira? | Business context |
 |---|---|---|---|
-| Zoho | PM-authored task fetched via REST API | Yes | Full (task description, attachments) |
+| Jira | PM-authored issue fetched via REST API | Yes | Full (issue description, attachments) |
 | Document | Parsed from a local file (`.md`, `.txt`, `.pdf`, exported HTML) | No | As rich as the document |
 | Explore | Inferred from live DOM crawl | No | UI-only — hidden states may be missed |
 
@@ -310,7 +308,7 @@ Defined in `shared/utils/timeouts.ts` — `ACTION_TIMEOUT` and `NAV_TIMEOUT` def
 
 ## Sharing with a Team
 
-Each collaborator needs their own `.env` with personal Zoho OAuth credentials (the portal/project IDs are shared; the client ID, secret, and refresh token are per-person).
+Each collaborator needs their own `.env` with a personal Jira API token (the base URL/project key are shared; the email and API token are per-person).
 
 `CLAUDE.md` is committed to the repo and loads automatically in Claude Code for anyone who clones the project — it contains the project overview, agent triggers, and key rules.
 
@@ -325,5 +323,5 @@ Each collaborator needs their own `.env` with personal Zoho OAuth credentials (t
 | `BASE_URL` undefined | Check `.env`; confirm `playwright.config.ts` has `import * as dotenv` at the top |
 | Auto-extractor captures 0 elements | Verify `BASE_URL` is correct; try `--headed` to inspect the page |
 | TypeScript errors | `npx tsc --noEmit` to list all; check import paths are relative from `tests/` |
-| Agent 5 creates no issues | Confirm `all_issues/issues_{FeatureName}_*.md` files exist; check `zoho/sync_log.json` for prior runs |
+| Agent 5 creates no issues | Confirm `all_issues/issues_{FeatureName}_*.md` files exist; check `jira/sync_log.json` for prior runs |
 | Test timeout on first load | Verify app is reachable at `BASE_URL` |

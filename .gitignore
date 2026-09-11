@@ -32,10 +32,10 @@ features/**/bugReports/QA_RUN_REPORT.md
 # and it may contain various generated files that are not relevant to all users.
 features/
 
-# Zoho sync log (contains issue IDs — keep locally, not in source control) and config (contains Project ID and API key — keep locally, not in source control)
-zoho/sync_log.json
-zoho/config.json
-zoho/task_sync_log.json
+# Jira sync log (contains issue IDs — keep locally, not in source control) and config (contains project key — keep locally, not in source control)
+jira/sync_log.json
+jira/config.json
+jira/task_sync_log.json
 
 # Claude Code local settings (contains machine-specific paths)
 .claude/*
