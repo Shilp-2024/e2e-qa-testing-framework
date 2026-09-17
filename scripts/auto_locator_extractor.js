@@ -263,11 +263,14 @@ function evalLocator(page, expr) {
 async function runInteractionStep(page, step) {
   const loc = step.target ? evalLocator(page, step.target) : null;
   switch (step.action) {
-    case 'click':        await loc.click({ timeout: ACTION_TIMEOUT }); break;
+    // `force: true` bypasses Playwright's actionability wait (visible/enabled/stable) — useful for
+    // Material/CDK components where an overlay or animation transiently intercepts pointer events,
+    // or a custom element is flagged non-enabled by heuristics that don't apply to it.
+    case 'click':        await loc.click({ timeout: ACTION_TIMEOUT, force: !!step.force }); break;
     case 'fill':         await loc.fill(step.value ?? '', { timeout: ACTION_TIMEOUT }); break;
     case 'selectOption': await loc.selectOption(step.value, { timeout: ACTION_TIMEOUT }); break;
     case 'waitFor':      await loc.waitFor({ state: step.state || 'visible', timeout: ACTION_TIMEOUT }); break;
-    case 'submitInvalid':await loc.click({ timeout: ACTION_TIMEOUT }); break; // click submit with empty/invalid form
+    case 'submitInvalid':await loc.click({ timeout: ACTION_TIMEOUT, force: !!step.force }); break; // click submit with empty/invalid form
     case 'press':        await page.keyboard.press(step.value || 'Enter'); break;
     default: console.warn(`   ⚠️  unknown interaction action: ${step.action}`);
   }
@@ -394,7 +397,15 @@ async function main() {
   console.log(`  Cache        : ${force ? 'bypassed (--force)' : 'enabled'}`);
   console.log('══════════════════════════════════════════════════════════\n');
 
-  const browser = await chromium.launch({ headless: !headed });
+  // Some sandboxed environments only have an older/full chromium build cached (no matching
+  // headless-shell revision for this Playwright version); allow overriding via env so the
+  // extractor still runs without a full `playwright install` network fetch.
+  const launchOpts = { headless: !headed };
+  if (process.env.CHROMIUM_EXECUTABLE_PATH) {
+    launchOpts.executablePath = process.env.CHROMIUM_EXECUTABLE_PATH;
+    launchOpts.args = ['--no-sandbox'];
+  }
+  const browser = await chromium.launch(launchOpts);
   const context = await browser.newContext({ baseURL: baseUrl });
   const page = await context.newPage();
 
@@ -406,15 +417,60 @@ async function main() {
       await page.goto(loginUrl);
       await page.waitForLoadState('domcontentloaded');
       await page.getByRole('textbox', { name: /username|email/i }).first().fill(email);
-      await page.getByRole('textbox', { name: /password/i }).first().fill(password);
+      // Some apps use a multi-step login (email → Next → separate password screen) rather than
+      // a single combined form. If a password field isn't present yet, look for a "Next"-style
+      // continue button, click it, and wait for the password field to appear.
+      let passwordField = page.locator('input[type="password"]').first();
+      if (!(await passwordField.count())) {
+        const nextBtn = page.getByRole('button', { name: /^next$/i }).first();
+        if (await nextBtn.count()) {
+          await nextBtn.click();
+          await page.waitForLoadState('networkidle').catch(() => {});
+        }
+      }
+      passwordField = page.locator('input[type="password"]').first();
+      await passwordField.waitFor({ state: 'visible', timeout: ACTION_TIMEOUT });
+      await passwordField.fill(password);
       await page.getByRole('button', { name: /sign in/i }).or(page.getByRole('button', { name: /log in/i })).first().click();
-      await page.waitForLoadState('networkidle');
+      // 'networkidle' can resolve prematurely between two bursts of SPA requests (auth POST,
+      // then a delayed second wave — profile fetch, router guards — before the redirect fires).
+      // Wait explicitly for navigation away from the sign-in URL first, THEN settle on networkidle.
+      await page.waitForURL((u) => !/sign-in|\/login\b/i.test(u.toString()), { timeout: ACTION_TIMEOUT }).catch(() => {});
+      await page.waitForLoadState('networkidle', { timeout: ACTION_TIMEOUT }).catch(() => {});
+      if (/sign-in|\/login\b/i.test(page.url())) {
+        console.warn(`   ⚠️  still on sign-in page after login attempt (${page.url()}) — check TEST_USER_EMAIL/TEST_USER_PASSWORD or site behaviour.`);
+      }
       console.log(`   ✅ Authenticated — ${page.url()}\n`);
+
+      // Optional post-login club/org switch for multi-tenant accounts. Only the account's
+      // default/last-active club is selected after login — if the feature under test needs a
+      // specific club (e.g. one with a given feature flag enabled), TEST_CLUB_NAME picks it via
+      // whatever combobox is showing the current club name in the header/sidebar.
+      const clubName = process.env.TEST_CLUB_NAME;
+      if (clubName) {
+        console.log(`🏟️  Switching to club "${clubName}" ...`);
+        try {
+          const clubSwitcher = page.getByRole('combobox').first();
+          await clubSwitcher.click({ timeout: ACTION_TIMEOUT });
+          const clubOption = page.getByRole('option', { name: clubName, exact: true });
+          await clubOption.waitFor({ state: 'visible', timeout: ACTION_TIMEOUT });
+          await clubOption.click();
+          await page.waitForLoadState('networkidle', { timeout: ACTION_TIMEOUT }).catch(() => {});
+          console.log(`   ✅ Switched to "${clubName}" — ${page.url()}\n`);
+        } catch (e) {
+          console.warn(`   ⚠️  could not switch to club "${clubName}": ${e.message?.split('\n')[0]} — continuing with the account's default club.\n`);
+        }
+      }
     }
 
     console.log(`📄 Navigating to ${url} ...`);
     await page.goto(url);
-    await page.waitForLoadState('networkidle');
+    await page.waitForLoadState('networkidle', { timeout: ACTION_TIMEOUT }).catch(() => {});
+    // Some routes (e.g. an "edit" view that must fetch existing record data before rendering the
+    // form) do a second async round-trip right after the shell settles — 'networkidle' can resolve
+    // in the gap between the shell load and that fetch/render. A short settle buffer avoids the
+    // initial DOM scan running on a half-rendered page.
+    await page.waitForTimeout(3500);
     console.log(`   Loaded: ${page.url()}\n`);
 
     // ── DOM-hash cache check ────────────────────────────────────────────────
