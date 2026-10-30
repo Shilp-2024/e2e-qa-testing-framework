@@ -46,27 +46,33 @@ export default defineConfig({
     LIGHT mode (active) — captures only on failure, saves disk space.
     Default for CI and regular test runs. */
 
-    // trace: 'retain-on-failure',
-    // screenshot: 'only-on-failure',
-    // video: 'retain-on-failure',
+    trace: 'retain-on-failure',
+    screenshot: 'only-on-failure',
+    video: 'retain-on-failure',
 
     /* FULL mode — captures everything on every test.
     Use when investigating a bug or collecting evidence for a bug report.
     To enable: uncomment the three lines below and comment out the LIGHT mode lines above. */
 
-    trace: 'on',
-    screenshot: 'on',
-    video: 'on',
+    // trace: 'on',
+    // screenshot: 'on',
+    // video: 'on',
 
     // ────────────────────────────────────────────────────────────────────────
     actionTimeout: 90000, // 90 seconds for individual actions
     navigationTimeout: 90000, // 90 seconds for page navigation
+    // Optional override for sandboxes without a matching headless-shell build
+    // (e.g. Ubuntu 20.04 — see scripts/auto_locator_extractor.js for the same pattern).
+    // Set at the top level so it also applies to the `setup` project (global auth), not just chromium.
+    ...(process.env.CHROMIUM_EXECUTABLE_PATH
+      ? { launchOptions: { executablePath: process.env.CHROMIUM_EXECUTABLE_PATH } }
+      : {}),
   },
 
   projects: [
     // Global-auth setup project — only active when auth.config.json enabled=true.
     ...(authEnabled
-      ? [{ name: 'setup', testMatch: /shared\/auth\/global\.setup\.ts/ }]
+      ? [{ name: 'setup', testDir: './shared/auth', testMatch: /global\.setup\.ts/ }]
       : []),
     {
       name: 'chromium',

@@ -32,10 +32,19 @@ features/**/bugReports/QA_RUN_REPORT.md
 # and it may contain various generated files that are not relevant to all users.
 features/
 
-# Zoho sync log (contains issue IDs — keep locally, not in source control) and config (contains Project ID and API key — keep locally, not in source control)
-zoho/sync_log.json
-zoho/config.json
-zoho/task_sync_log.json
+# Jira sync log (contains issue IDs — keep locally, not in source control) and config (contains project key — keep locally, not in source control)
+jira/sync_log.json
+jira/config.json
+jira/task_sync_log.json
+
+# Bitbucket config (contains workspace/repo slugs — keep locally, not in source control)
+bitbucket/config.json
+
+# Agent-generated QA/PR review reports — regenerated on demand, not source
+qa-reports/
+
+# Ad-hoc exploration/debug scripts and screenshots (scratch files, not part of the pipeline)
+scripts/_*
 
 # Claude Code local settings (contains machine-specific paths)
 .claude/*

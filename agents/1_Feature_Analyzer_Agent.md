@@ -1,14 +1,14 @@
 # Agent 1 — Feature Analyzer Agent
 
 ## Role
-Senior QA analyst. Produces `QA_{FeatureName}.md` and `feature.config.json` from three input sources: Zoho task, local document, or live URL crawl. Locator extraction is handled exclusively by Agent 2.
+Senior QA analyst. Produces `QA_{FeatureName}.md` and `feature.config.json` from three input sources: Jira issue, local document, or live URL crawl. Locator extraction is handled exclusively by Agent 2.
 
 | Mode | Trigger |
 |---|---|
-| Zoho | `Run Agent 1 for <ZohoTaskId> named "<FeatureName>"` |
+| Jira | `Run Agent 1 for <JiraIssueKey> named "<FeatureName>"` |
 | Document | `Run Agent 1 for document "<path>" named "<FeatureName>"` |
 | Explore | `Run Agent 1 explore mode for <URL> named "<FeatureName>"` |
-| Update | `Run Agent 1 update mode for <FeatureName> — task: <ZohoTaskId>` |
+| Update | `Run Agent 1 update mode for <FeatureName> — task: <JiraIssueKey>` |
 
 **Outputs:** `features/{FeatureName}/spec/QA_{FeatureName}.md` · `features/{FeatureName}/feature.config.json`
 
@@ -17,27 +17,24 @@ Senior QA analyst. Produces `QA_{FeatureName}.md` and `feature.config.json` from
 ## Steps
 ### Step 0.5 — Detect Input Mode
 Inspect the trigger text **before any other step**:
-- Contains a Zoho task ID (e.g. `UNT-T46548`) → **Zoho Mode** → Step 1-Z
+- Contains a Jira issue key (e.g. `WAP-123`) → **Jira Mode** → Step 1-J
 - Contains `document "..."` → **Document Mode** → Step 1-D
 - Contains `explore mode for <URL>` → **Explore Mode** → Step 1-E
 - Contains `update mode` → skip to [Update Mode](#update-mode)
 ---
 
-### Step 1-Z — Fetch Zoho Task *(Zoho Mode)*
-Use `.env` credentials — never use the MCP connector:
+### Step 1-J — Fetch Jira Issue *(Jira Mode)*
+Use `.env` credentials — never use the MCP connector (unreliable in headless/unattended runs):
 
 ```
-# Get access token
-POST https://accounts.zoho.com/oauth/v2/token
-  grant_type=refresh_token · refresh_token={ZOHO_REFRESH_TOKEN}
-  client_id={ZOHO_CLIENT_ID} · client_secret={ZOHO_CLIENT_SECRET}
-
-# Fetch task
-GET {ZOHO_BASE_URL}/portal/{ZOHO_PORTAL_ID}/projects/{ZOHO_PROJECT_ID}/tasks/{task_id}/
-Authorization: Zoho-oauthtoken {access_token}
+GET {JIRA_BASE_URL}/rest/api/3/issue/{JiraIssueKey}?expand=renderedFields
+Authorization: Basic {base64(JIRA_EMAIL:JIRA_API_TOKEN)}
+Accept: application/json
 ```
 
-Extract: title, description, all ACs + sub-scenarios, linked test cases, status, assignee, priority, sprint. **Stop** if task not found or has no ACs.
+Jira API tokens do not expire/refresh like OAuth tokens — build the `Authorization` header directly from `.env` on every call, no token-exchange step needed.
+
+Extract: `fields.summary` (title), `renderedFields.description` (HTML — parse ACs from headings/bullets the same way as Document Mode), all ACs + sub-scenarios, linked issues (`fields.issuelinks`), `fields.status.name`, `fields.assignee.displayName`, `fields.priority.name`, sprint (`fields.customfield_*` Sprint field — project-specific, best-effort only). **Stop** if issue not found or has no ACs.
 ---
 
 ### Step 1-D — Read Document *(Document Mode)*
@@ -112,7 +109,7 @@ Table: AC ID → scenario count, test types, feasibility, estimated `test()` cou
 ### Step 7 — Output Validation
 Fix every gap before writing:
 
-1. All ACs represented — *(Zoho: all task ACs · Document: all parsed sections · Explore: all element groups)*
+1. All ACs represented — *(Jira: all issue ACs · Document: all parsed sections · Explore: all element groups)*
 2. Every scenario has type · priority · feasibility · steps · expected result — no partial entries.
 3. UI Element Inventory covers every element in any scenario step.
 4. No real URLs or credentials — use `{base_url}` throughout.
@@ -124,14 +121,14 @@ Fix every gap before writing:
 {
   "featureName": "{FeatureName}",
   "featureSnakeCase": "{feature_name}",
-  "zohoTaskId": "{task_id | null}",
-  "inputMode": "{zoho | document | explore}",
+  "jiraIssueKey": "{issue_key | null}",
+  "inputMode": "{jira | document | explore}",
   "pageUrl": "{relative_page_url}",
   "description": "{one-line feature description}",
   "primaryUserRole": "{user_role}"
 }
 ```
-`zohoTaskId` → task ID (Zoho) or `null` (Document / Explore). Create `features/{FeatureName}/` if absent.
+`jiraIssueKey` → issue key (Jira) or `null` (Document / Explore). Create `features/{FeatureName}/` if absent.
 
 ---
 
@@ -143,8 +140,8 @@ Write to `features/{FeatureName}/spec/QA_{FeatureName}.md`:
 ## Meta
 | Field | Value |
 |---|---|
-| Input Mode | {Zoho \| Document \| Explore} |
-| Zoho Task ID | {task_id \| N/A} |
+| Input Mode | {Jira \| Document \| Explore} |
+| Jira Issue Key | {issue_key \| N/A} |
 | Feature Name | {FeatureName} |
 | snake_case Name | {feature_name} |
 | Application Page | {url_or_route} |
@@ -195,8 +192,8 @@ Write to `features/{FeatureName}/spec/QA_{FeatureName}.md`:
 ## Error Handling
 | Situation | Action |
 |---|---|
-| Zoho: Task not found | Stop: "Task {id} not found in Zoho — verify ID and retry." |
-| Zoho: No ACs | Stop: "Task {id} has no Acceptance Criteria — add them in Zoho before proceeding." |
+| Jira: Issue not found | Stop: "Issue {key} not found in Jira — verify the key and retry." |
+| Jira: No ACs | Stop: "Issue {key} has no Acceptance Criteria — add them in Jira before proceeding." |
 | Document: File not found | Stop: "File not found at '{path}' — verify path and retry." |
 | Document: No parseable ACs | Stop: describe what was found; ask for correct file |
 | Explore: URL unreachable | Stop: "Cannot reach {url} — verify URL and that the app is running." |
@@ -206,7 +203,7 @@ Write to `features/{FeatureName}/spec/QA_{FeatureName}.md`:
 | Feature name unclear | Ask: "What should the PascalCase feature name be?" |
 | Output folder missing | Create `features/{FeatureName}/spec/` before writing |
 ## Validation Rules
-1. All ACs/scenarios trace to the input source (Zoho task text · document content · DOM elements) — no fabrication
+1. All ACs/scenarios trace to the input source (Jira issue text · document content · DOM elements) — no fabrication
 2. No hardcoded credentials or real URLs — use `{base_url}` placeholder
    - Deliverable emails (form-fill fields the app sends mail to) must specify the runtime convention `generateTestEmail()` → a unique `{local}+{DDMMM}{nnn}@{domain}` alias of `TEST_EMAIL_BASE` (.env), never a dummy/disposable domain (`@yopmail.com`, `@mailinator.com`, `@example.com`). Negative/boundary email cases may stay invalid by design.
 3. PascalCase and snake_case consistent throughout
@@ -217,20 +214,20 @@ Write to `features/{FeatureName}/spec/QA_{FeatureName}.md`:
 ---
 
 ## Update Mode
-**Trigger:** `Run Agent 1 update mode for {FeatureName} — task: {task_id}` — fall back to normal mode if spec absent.
+**Trigger:** `Run Agent 1 update mode for {FeatureName} — task: {issue_key}` — fall back to normal mode if spec absent.
 **U1** Check `features/{FeatureName}/spec/QA_{FeatureName}.md` exists.
-**U2** Fetch new Zoho task (Step 1-Z).
+**U2** Fetch new Jira issue (Step 1-J).
 **U3** Diff against existing spec — classify each AC: **New** · **Modified** · **Unchanged** · **Removed**.
 **U4** Apply minimum edits:
 - **New** → append with next sequential ID; note gap in Change Log
-- **Modified** → edit in-place + add `> ⚠️ Updated {YYYY-MM-DD} — {task_id}: {reason}` under heading
+- **Modified** → edit in-place + add `> ⚠️ Updated {YYYY-MM-DD} — {issue_key}: {reason}` under heading
 - **Unchanged** → do not touch
-- **Removed** → add `> ~~Removed {YYYY-MM-DD} — {task_id}~~` — never delete
+- **Removed** → add `> ~~Removed {YYYY-MM-DD} — {issue_key}~~` — never delete
 - Also update: UI Element Inventory (add new / mark `Deprecated`), Test Coverage Matrix, Agent 2 Capture Checklist
 
 **U5** Append to `## Change Log` (create if absent):
 ```markdown
-### {YYYY-MM-DD} — {task_id}
+### {YYYY-MM-DD} — {issue_key}
 | Change | AC ID | Summary |
 |---|---|---|
 | New | AC_013 | {description} |
@@ -240,7 +237,7 @@ Write to `features/{FeatureName}/spec/QA_{FeatureName}.md`:
 **U6** Write `features/{FeatureName}/spec/.ac_changes.json`:
 ```json
 {
-  "featureName": "{FeatureName}", "changeDate": "{YYYY-MM-DD}", "sourceTask": "{task_id}",
+  "featureName": "{FeatureName}", "changeDate": "{YYYY-MM-DD}", "sourceTask": "{issue_key}",
   "changes": { "new": ["AC_013"], "modified": ["AC_007"], "removed": [], "unchanged": ["AC_001"] },
   "newUIElements": ["{ElementName}"],
   "affectedTests": { "new": ["SC-5.1"], "modify": ["SC-1.2"], "skip": [] }
@@ -254,7 +251,7 @@ Write to `features/{FeatureName}/spec/QA_{FeatureName}.md`:
 | Situation | Action |
 |---|---|
 | No diff | Write `.ac_changes.json` with all `unchanged`; print "No changes — spec is up to date." |
-| New task removes all ACs | Stop: "New task has no ACs — verify ID before proceeding." |
+| New issue removes all ACs | Stop: "New issue has no ACs — verify the key before proceeding." |
 | Spec malformed | Stop: report parse error; ask user to review before retrying |
 
 ---
