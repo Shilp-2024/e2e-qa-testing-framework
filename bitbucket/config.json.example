@@ -1,0 +1,9 @@
+{
+  "workspace": "clubforce",
+  "repos": {
+    "backend": "ws",
+    "frontend": "app",
+    "mobile": "new_app"
+  },
+  "_note": "Bitbucket Cloud identifies a repo by {workspace}/{repo_slug}. 'repos' maps a short alias (used when a user just says 'backend PR #123') to the actual repo slug used in API calls: https://api.bitbucket.org/2.0/repositories/{workspace}/{repo_slug}. Add more aliases here if more repos are added to the workspace."
+}

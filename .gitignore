@@ -37,6 +37,15 @@ jira/sync_log.json
 jira/config.json
 jira/task_sync_log.json
 
+# Bitbucket config (contains workspace/repo slugs — keep locally, not in source control)
+bitbucket/config.json
+
+# Agent-generated QA/PR review reports — regenerated on demand, not source
+qa-reports/
+
+# Ad-hoc exploration/debug scripts and screenshots (scratch files, not part of the pipeline)
+scripts/_*
+
 # Claude Code local settings (contains machine-specific paths)
 .claude/*
 !.claude/commands/

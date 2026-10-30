@@ -36,9 +36,10 @@ Runs Agents 1→5 end-to-end with no stops (see `.claude/commands/e2e-runner.md`
 - Permission allowlist for prompt-free runs lives in `.claude/settings.json` (shared). For fully headless runs: `claude -p "/e2e-runner <FeatureName>"`.
 
 ## Setup
-1. `cp .env.example .env` — fill in `BASE_URL`, Jira credentials, test user
+1. `cp .env.example .env` — fill in `BASE_URL`, Jira credentials, Bitbucket credentials, test user
 2. `npm install`
 3. `npx playwright install chromium`
+4. `cp -n jira/config.json.example jira/config.json` and `cp -n bitbucket/config.json.example bitbucket/config.json` (both run automatically by `npm run setup`)
 
 ## Key rules (apply to every response)
 - **No narration before tool calls** — act, don't announce
@@ -49,9 +50,13 @@ Runs Agents 1→5 end-to-end with no stops (see `.claude/commands/e2e-runner.md`
 - **Never use the Jira MCP connector** — use the REST API with `.env` credentials (unreliable in headless/unattended runs)
 - **Never persist the Jira API token or its Basic-auth header to disk**
 - **Redact PII with `[REDACTED]` before creating Jira issues**
+- **Never use a Bitbucket MCP connector either** — PR-reviewer agents (`agents/6_pr-reviewer.md`, `agents/7_pr-reviewer.md`) fetch Bitbucket PRs via the REST API with `.env` credentials, same reasoning as Jira
+- **Never persist the Bitbucket API token or its Basic-auth header to disk**
 
 ## Credentials
-- `.env` is gitignored — each team member needs their own Jira API token
+- `.env` is gitignored — each team member needs their own Jira API token and Bitbucket API token
 - See `.env.example` for setup steps
 - Jira project key is shared: `WAP`
 - Each member generates their own `JIRA_API_TOKEN` at https://id.atlassian.com/manage-profile/security/api-tokens
+- Bitbucket workspace is shared: `clubforce` (repos: `ws` backend, `app` frontend, `new_app` mobile — see `bitbucket/config.json`)
+- Each member generates their own `BITBUCKET_API_TOKEN` at https://id.atlassian.com/manage-profile/security/api-tokens (select the Bitbucket product, scopes: Repositories:Read, Pull requests:Read)

@@ -1,18 +1,25 @@
 {
-  "enabled": false,
-  "_comment": "Generic global-auth config. Set enabled=true to log in ONCE before the suite and reuse the session via storageState (skips per-test login). Expressions are Playwright locator expressions referencing `page`; credentials are read from the named .env vars. Disabled by default so features with their own per-test login (e.g. EnergyAuditorAuthentication) keep working unchanged.",
+  "enabled": true,
+  "_comment": "Generic global-auth config. Set enabled=true to log in ONCE before the suite and reuse the session via storageState (skips per-test login). Expressions are Playwright locator expressions referencing `page`; credentials are read from the named .env vars. Disabled by default so features with their own per-test login (e.g. EnergyAuditorAuthentication) keep working unchanged. Enabled here for DeliveryInsights (SCF-2335), whose pages require an authenticated Backoffice session — the multi-step (email -> Next -> password) form and post-login club switch mirror scripts/auto_locator_extractor.js's login flow.",
   "loginUrl": "/",
   "username": {
     "expr": "page.getByRole('textbox', { name: /email|username/i }).first()",
     "envVar": "TEST_USER_EMAIL"
   },
+  "nextButton": {
+    "expr": "page.getByRole('button', { name: /^next$/i }).first()"
+  },
   "password": {
-    "expr": "page.getByRole('textbox', { name: /password/i }).first()",
+    "expr": "page.locator('input[type=\"password\"]').first()",
     "envVar": "TEST_USER_PASSWORD"
   },
   "submit": {
     "expr": "page.getByRole('button', { name: /sign in|log in|login/i }).first()"
   },
-  "successUrlContains": "/",
+  "successUrlContains": "",
+  "clubSwitch": {
+    "dropdownExpr": "page.getByRole('combobox').first()",
+    "envVar": "TEST_CLUB_NAME"
+  },
   "storageStatePath": ".auth/state.json"
 }
